@@ -1,0 +1,114 @@
+using System.Buffers;
+using System.Text;
+using MUnique.OpenMU.Network.Packets.ClientToServer;
+
+namespace MuOnlineConsole
+{
+    /// <summary>
+    /// Builds outgoing packets for login and character interaction.
+    /// </summary>
+    public static class PacketBuilder
+    {
+        public static int BuildLoginPacket(IBufferWriter<byte> writer, string username, string password, byte[] clientVersion, byte[] clientSerial, byte[] xor3Keys)
+        {
+            int packetLength = LoginLongPassword.Length;
+            var memory = writer.GetMemory(packetLength).Slice(0, packetLength);
+            var loginPacket = new LoginLongPassword(memory);
+
+            Span<byte> userBytes = stackalloc byte[loginPacket.Username.Length];
+            Span<byte> passBytes = stackalloc byte[loginPacket.Password.Length];
+            userBytes.Clear();
+            passBytes.Clear();
+
+            Encoding.ASCII.GetBytes(username, userBytes);
+            Encoding.ASCII.GetBytes(password, passBytes);
+            userBytes.CopyTo(loginPacket.Username);
+            passBytes.CopyTo(loginPacket.Password);
+
+            EncryptXor3(loginPacket.Username, xor3Keys);
+            EncryptXor3(loginPacket.Password, xor3Keys);
+
+            loginPacket.TickCount = (uint)Environment.TickCount;
+            clientVersion.CopyTo(loginPacket.ClientVersion);
+            clientSerial.CopyTo(loginPacket.ClientSerial);
+
+            return packetLength;
+        }
+
+        public static int BuildRequestCharacterListPacket(IBufferWriter<byte> writer)
+        {
+            int packetSize = RequestCharacterList.Length;
+            var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+            var packet = new RequestCharacterList(memory);
+            packet.Language = 0;
+
+            return packetSize;
+        }
+
+        public static int BuildInstantMoveRequestPacket(IBufferWriter<byte> writer, byte x, byte y)
+        {
+            int packetSize = InstantMoveRequest.Length;
+            var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+            var packet = new InstantMoveRequest(memory);
+            packet.TargetX = x;
+            packet.TargetY = y;
+            return packetSize;
+        }
+
+        public static int BuildWalkRequestPacket(IBufferWriter<byte> writer, byte startX, byte startY, byte[] path)
+        {
+            if (path == null || path.Length == 0) return 0;
+
+            int stepsDataLength = (path.Length + 1) / 2;
+            int packetSize = WalkRequest.GetRequiredSize(stepsDataLength);
+
+            var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+            var packet = new WalkRequest(memory);
+
+            packet.SourceX = startX;
+            packet.SourceY = startY;
+            packet.StepCount = (byte)path.Length;
+            packet.TargetRotation = (path.Length > 0) ? path[0] : (byte)0;
+
+            var directionsSpan = packet.Directions;
+            int pathIndex = 0;
+            for (int i = 0; i < stepsDataLength; i++)
+            {
+                byte highNibble = 0x0F;
+                byte lowNibble = 0x0F;
+                if (pathIndex < path.Length) highNibble = path[pathIndex++];
+                if (pathIndex < path.Length) lowNibble = path[pathIndex++];
+                directionsSpan[i] = (byte)((highNibble << 4) | (lowNibble & 0x0F));
+            }
+            return packetSize;
+        }
+
+        public static int BuildAnimationRequestPacket(IBufferWriter<byte> writer, byte rotation, byte animationNumber)
+        {
+            int packetSize = AnimationRequest.Length;
+            var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+            var packet = new AnimationRequest(memory);
+            packet.Rotation = rotation;
+            packet.AnimationNumber = animationNumber;
+            return packetSize;
+        }
+
+        public static int BuildSelectCharacterPacket(IBufferWriter<byte> writer, string characterName)
+        {
+            int packetSize = SelectCharacter.Length;
+            var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+            var packet = new SelectCharacter(memory);
+            packet.Name = characterName;
+
+            return packetSize;
+        }
+
+        private static void EncryptXor3(Span<byte> data, byte[] xor3Keys)
+        {
+            for (int i = 0; i < data.Length; i++)
+            {
+                data[i] ^= xor3Keys[i % 3];
+            }
+        }
+    }
+}
