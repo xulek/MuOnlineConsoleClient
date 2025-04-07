@@ -291,75 +291,55 @@ namespace MuOnlineConsole
         {
             try
             {
-                string? firstCharacterName = null;
-                string charNameToSelect = "???";
+                List<string> characterNames = new();
 
                 switch (TargetVersion)
                 {
                     case TargetProtocolVersion.Season6:
                         var charListS6 = new CharacterList(packet);
-                        _logger.LogInformation("📜 Received character list (S6): {Count} characters. VaultExtended: {Vault}, Unlock: {Unlock}",
-                            charListS6.CharacterCount, charListS6.IsVaultExtended, charListS6.UnlockFlags);
-                        if (charListS6.CharacterCount > 0)
-                        {
-                            var character = charListS6[0];
-                            firstCharacterName = character.Name;
-                            _logger.LogInformation("  -> Slot {Slot}: {Name} (Level {Level})", character.SlotIndex, firstCharacterName, character.Level);
-                            charNameToSelect = firstCharacterName;
-                        }
-                        for (int i = 1; i < charListS6.CharacterCount; ++i)
+                        _logger.LogInformation("📜 Received character list (S6): {Count} characters.", charListS6.CharacterCount);
+                        for (int i = 0; i < charListS6.CharacterCount; ++i)
                         {
                             var character = charListS6[i];
                             _logger.LogInformation("  -> Slot {Slot}: {Name} (Level {Level})", character.SlotIndex, character.Name, character.Level);
+                            characterNames.Add(character.Name);
                         }
                         break;
+
                     case TargetProtocolVersion.Version097:
                         var charList097 = new CharacterList095(packet);
                         _logger.LogInformation("📜 Received character list (0.97): {Count} characters.", charList097.CharacterCount);
-                        if (charList097.CharacterCount > 0)
-                        {
-                            var character = charList097[0];
-                            firstCharacterName = character.Name;
-                            _logger.LogInformation("  -> Slot {Slot}: {Name} (Level {Level})", character.SlotIndex, firstCharacterName, character.Level);
-                            charNameToSelect = firstCharacterName;
-                        }
-                        for (int i = 1; i < charList097.CharacterCount; ++i)
+                        for (int i = 0; i < charList097.CharacterCount; ++i)
                         {
                             var character = charList097[i];
                             _logger.LogInformation("  -> Slot {Slot}: {Name} (Level {Level})", character.SlotIndex, character.Name, character.Level);
+                            characterNames.Add(character.Name);
                         }
                         break;
+
                     case TargetProtocolVersion.Version075:
                         var charList075 = new CharacterList075(packet);
                         _logger.LogInformation("📜 Received character list (0.75): {Count} characters.", charList075.CharacterCount);
-                        if (charList075.CharacterCount > 0)
-                        {
-                            var character = charList075[0];
-                            firstCharacterName = character.Name;
-                            _logger.LogInformation("  -> Slot {Slot}: {Name} (Level {Level})", character.SlotIndex, firstCharacterName, character.Level);
-                            charNameToSelect = firstCharacterName;
-                        }
-                        for (int i = 1; i < charList075.CharacterCount; ++i)
+                        for (int i = 0; i < charList075.CharacterCount; ++i)
                         {
                             var character = charList075[i];
                             _logger.LogInformation("  -> Slot {Slot}: {Name} (Level {Level})", character.SlotIndex, character.Name, character.Level);
+                            characterNames.Add(character.Name);
                         }
                         break;
+
                     default:
                         _logger.LogWarning("❓ Unsupported protocol version ({Version}) for CharacterList.", TargetVersion);
                         return;
                 }
 
-
-                if (firstCharacterName != null)
+                if (characterNames.Count > 0)
                 {
-                    _logger.LogInformation("👉 Automatically selecting first character: {Name}", firstCharacterName);
-                    _clientState.SetCharacterName(charNameToSelect);
-                    Task.Run(() => _characterService.SelectCharacterAsync(firstCharacterName));
+                    Task.Run(() => _clientState.SelectCharacterInteractivelyAsync(characterNames));
                 }
                 else
                 {
-                    _logger.LogWarning("👤 No characters on the account.");
+                    _logger.LogWarning("👤 No characters found on the account.");
                 }
             }
             catch (Exception ex)

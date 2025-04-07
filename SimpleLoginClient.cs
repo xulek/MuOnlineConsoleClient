@@ -61,6 +61,8 @@ namespace MuOnlineConsole
         private readonly string _username;
         private readonly string _password;
         private Dictionary<byte, byte> _serverDirectionMap = new();
+        private List<string>? _pendingCharacterSelection = null;
+
 
         public bool IsInGame => _isInGame;
         public bool IsConnected => _connectionManager.IsConnected;
@@ -152,6 +154,26 @@ namespace MuOnlineConsole
                         _logger.LogInformation("Received 'exit' command. Shutting down...");
                         _cancellationTokenSource?.Cancel();
                         return;
+
+                    case "select":
+                        if (_pendingCharacterSelection == null)
+                        {
+                            _logger.LogWarning("No character list available to select from.");
+                            break;
+                        }
+
+                        if (parts.Length != 2 || !int.TryParse(parts[1], out int index) || index < 1 || index > _pendingCharacterSelection.Count)
+                        {
+                            _logger.LogWarning("Usage: select <number> (1-{Max})", _pendingCharacterSelection.Count);
+                            break;
+                        }
+
+                        var selectedName = _pendingCharacterSelection[index - 1];
+                        _logger.LogInformation("🎯 Selected character: {Name}", selectedName);
+                        _characterName = selectedName;
+                        _ = _characterService.SelectCharacterAsync(selectedName);
+                        _pendingCharacterSelection = null;
+                        break;
 
                     case "move":
                         if (!IsInGame) { _logger.LogWarning("Cannot move - character is not in game."); continue; }
@@ -263,6 +285,27 @@ namespace MuOnlineConsole
             }
             _logger.LogWarning("Translation not found for direction {StandardDir}, using original.", standardDirection);
             return standardDirection;
+        }
+
+        public Task SelectCharacterInteractivelyAsync(List<string> characterNames)
+        {
+            if (characterNames.Count == 0)
+            {
+                _logger.LogWarning("⚠️ No characters available on the account.");
+                return Task.CompletedTask;
+            }
+
+            Console.WriteLine("🧍 Available characters:");
+            for (int i = 0; i < characterNames.Count; i++)
+            {
+                Console.WriteLine($"  {i + 1}. {characterNames[i]}");
+            }
+
+            Console.WriteLine("👉 Type: select <number>  (e.g. 'select 1') to choose a character.");
+
+            _pendingCharacterSelection = characterNames;
+
+            return Task.CompletedTask;
         }
 
         public void SignalMovementHandled()

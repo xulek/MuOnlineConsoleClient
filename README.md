@@ -76,7 +76,11 @@ MuOnlineConsole/
 
 ## Usage
 
-When launched, the client will attempt to connect, log in, and select the first available character. Once in the game (`Character is now in-game...`), you can use the following commands:
+When launched, the client will attempt to connect, log in, and request the list of available characters. Once the character list is displayed, use the following command to select one:
+
+* `select <number>`: Selects a character from the list by number. Example: `select 1`
+
+After selecting a character and entering the game (`Character is now in-game...`), you can use the following commands:
 
 * `exit`: Closes the client.
 * `move X Y`: Sends an instant move (teleport) request to coordinates X, Y.
@@ -88,7 +92,6 @@ When launched, the client will attempt to connect, log in, and select the first 
 
 ## Potential Improvements
 
-* **Character Selection:** Implement interactive character selection from the list.
 * **Refactor `PacketRouter`:** Use the Strategy pattern or a Dictionary mapping for better organization.
 * **Character State Class:** Encapsulate character state variables into a dedicated class.
 * **Full Pathfinding:** Implement an A* algorithm (requires map data) for the `walkto` command to navigate around obstacles.
