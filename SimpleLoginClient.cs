@@ -58,34 +58,31 @@ namespace MuOnlineConsole
         private byte _currentX = 0;
         private byte _currentY = 0;
         private bool _isWalking = false;
+        private readonly string _username;
+        private readonly string _password;
+        private Dictionary<byte, byte> _serverDirectionMap = new();
 
         public bool IsInGame => _isInGame;
         public bool IsConnected => _connectionManager.IsConnected;
         public ushort GetCharacterId() => _characterId;
         public string GetCharacterName() => _characterName;
 
-        private static readonly Dictionary<byte, byte> serverDirectionMap = new Dictionary<byte, byte>
-        {
-            { 0, 7 },
-            { 1, 6 },
-            { 2, 5 },
-            { 3, 4 },
-            { 4, 3 },
-            { 5, 2 },
-            { 6, 1 },
-            { 7, 0 }
-        };
-
-        public SimpleLoginClient(ILoggerFactory loggerFactory, string? host = null, int? port = null, TargetProtocolVersion targetVersion = DefaultTargetVersion)
+        public SimpleLoginClient(ILoggerFactory loggerFactory, MuOnlineSettings settings)
         {
             _logger = loggerFactory.CreateLogger<SimpleLoginClient>();
-            var usedHost = host ?? DefaultHost;
-            var usedPort = port ?? DefaultPort;
 
-            _connectionManager = new ConnectionManager(loggerFactory, usedHost, usedPort, EncryptKeys, DecryptKeys);
-            _loginService = new LoginService(_connectionManager, _logger, ClientVersion, ClientSerial, Xor3Keys);
+            var clientVersionBytes = Encoding.ASCII.GetBytes(settings.ClientVersion);
+            var clientSerialBytes = Encoding.ASCII.GetBytes(settings.ClientSerial);
+            var targetVersion = Enum.Parse<TargetProtocolVersion>(settings.ProtocolVersion, ignoreCase: true);
+            
+
+            _connectionManager = new ConnectionManager(loggerFactory, settings.Host, settings.Port, EncryptKeys, DecryptKeys);
+            _loginService = new LoginService(_connectionManager, _logger, clientVersionBytes, clientSerialBytes, Xor3Keys);
             _characterService = new CharacterService(_connectionManager, _logger);
             _packetRouter = new PacketRouter(loggerFactory.CreateLogger<PacketRouter>(), _characterService, _loginService, targetVersion, this);
+            _serverDirectionMap = settings.DirectionMap;
+            _username = settings.Username;
+            _password = settings.Password;
         }
 
         /// <summary>
@@ -94,6 +91,7 @@ namespace MuOnlineConsole
         public async Task RunAsync()
         {
             _logger.LogInformation("🚀 Starting client execution (Target: {Version})...", _packetRouter.TargetVersion);
+            _logger.LogInformation("🔍 Using username '{Username}' and password '{Password}'", _username, _password);
             _cancellationTokenSource = new CancellationTokenSource();
             var cancellationToken = _cancellationTokenSource.Token;
 
@@ -104,7 +102,7 @@ namespace MuOnlineConsole
 
                 var commandLoopTask = Task.Run(() => CommandLoopAsync(cancellationToken), cancellationToken);
 
-                await _loginService.SendLoginRequestAsync(DefaultUsername, DefaultPassword);
+                await _loginService.SendLoginRequestAsync(_username, _password);
                 _logger.LogInformation("🎮 Client started. Type 'exit' to quit or 'move X Y' to move (after entering the game).");
 
                 try
@@ -258,7 +256,7 @@ namespace MuOnlineConsole
 
         private byte TranslateDirection(byte standardDirection)
         {
-            if (serverDirectionMap.TryGetValue(standardDirection, out byte serverDirection))
+            if (_serverDirectionMap.TryGetValue(standardDirection, out byte serverDirection))
             {
                 _logger.LogTrace("Translating direction {StandardDir} -> {ServerDir}", standardDirection, serverDirection);
                 return serverDirection;
