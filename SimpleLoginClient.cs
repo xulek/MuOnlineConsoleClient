@@ -99,8 +99,8 @@ namespace MuOnlineConsole
 
             if (await _connectionManager.ConnectAsync(cancellationToken))
             {
-                _connectionManager.Connection.PacketReceived += _packetRouter.RoutePacketAsync;
-                _connectionManager.Connection.Disconnected += _packetRouter.OnDisconnected;
+                _connectionManager.Connection.PacketReceived += sequence => new ValueTask(_packetRouter.RoutePacketAsync(sequence));
+                _connectionManager.Connection.Disconnected += () => new ValueTask(_packetRouter.OnDisconnected());
 
                 var commandLoopTask = Task.Run(() => CommandLoopAsync(cancellationToken), cancellationToken);
 
