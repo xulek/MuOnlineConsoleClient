@@ -1,3 +1,4 @@
+// ===== FILE: C:\Users\Michal\Documents\MuOnlineConsoleClient\PacketRouter.cs =====
 using System.Buffers;
 using System.Reflection;
 using System.Text;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network;
 using MUnique.OpenMU.Network.Packets;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
+using MUnique.OpenMU.Network.Packets.ConnectServer; // Add Connect Server namespace
 
 namespace MuOnlineConsole
 {
@@ -18,6 +20,7 @@ namespace MuOnlineConsole
         public TargetProtocolVersion TargetVersion { get; }
 
         private readonly Dictionary<(byte MainCode, byte SubCode), Func<Memory<byte>, Task>> _packetHandlers = new();
+        private bool _isConnectServerRouting = false; // Flag to determine routing context
 
         public PacketRouter(ILogger<PacketRouter> logger, CharacterService characterService, LoginService loginService, TargetProtocolVersion targetVersion, SimpleLoginClient clientState)
         {
@@ -27,24 +30,116 @@ namespace MuOnlineConsole
             _clientState = clientState;
 
             RegisterAttributeBasedHandlers();
+            RegisterConnectServerHandlers(); // Register CS handlers separately for clarity
+        }
+
+        /// <summary>
+        /// Sets the routing mode (Connect Server or Game Server).
+        /// </summary>
+        /// <param name="isConnectServer">True if routing for Connect Server, false for Game Server.</param>
+        public void SetRoutingMode(bool isConnectServer)
+        {
+            _isConnectServerRouting = isConnectServer;
+            _logger.LogInformation("🔄 Packet routing mode set to: {Mode}", isConnectServer ? "Connect Server" : "Game Server");
         }
 
         public Task RoutePacketAsync(ReadOnlySequence<byte> sequence)
         {
-            var packet = sequence.ToArray();
+            var packet = sequence.ToArray(); // Consider using SequenceReader for performance if needed
             _logger.LogDebug("📬 Received packet ({Length} bytes): {Data}", packet.Length, Convert.ToHexString(packet));
 
-            if (!TryParsePacketHeader(packet, out byte headerType, out byte code, out byte? subCode, out Memory<byte> packetMemory))
+            if (_isConnectServerRouting)
             {
-                _logger.LogWarning("❓ Failed to parse packet header: {Data}", Convert.ToHexString(packet));
+                return RouteConnectServerPacketAsync(packet);
+            }
+            else
+            {
+                return RouteGameServerPacketAsync(packet);
+            }
+        }
+
+        private Task RouteGameServerPacketAsync(Memory<byte> packet)
+        {
+            if (!TryParsePacketHeader(packet.Span, out byte headerType, out byte code, out byte? subCode, out Memory<byte> packetMemory))
+            {
+                _logger.LogWarning("❓ Failed to parse Game Server packet header: {Data}", Convert.ToHexString(packet.Span));
                 return Task.CompletedTask;
             }
 
-            _logger.LogDebug("🔎 Parsing: Header={HeaderType:X2}, Code={Code:X2}, SubCode={SubCode}",
+            _logger.LogDebug("🔎 Parsing GS Packet: Header={HeaderType:X2}, Code={Code:X2}, SubCode={SubCode}",
                 headerType, code, subCode.HasValue ? subCode.Value.ToString("X2") : "N/A");
 
             return DispatchPacketInternalAsync(packetMemory, code, subCode, headerType);
         }
+
+        private Task RouteConnectServerPacketAsync(Memory<byte> packet)
+        {
+            // Connect Server packets have a simpler structure (C1/C2 usually)
+            if (packet.Length < 3)
+            {
+                _logger.LogWarning("❓ Connect Server packet too short: {Data}", Convert.ToHexString(packet.Span));
+                return Task.CompletedTask;
+            }
+
+            byte headerType = packet.Span[0];
+            byte code = 0;
+            byte? subCode = null;
+            bool parseSuccess = false;
+
+            try
+            {
+                switch (headerType)
+                {
+                    case 0xC1:
+                        code = packet.Span[2];
+                        if (packet.Length >= 4 && ConnectServerSubCodeHolder.ContainsSubCode(code))
+                        {
+                            subCode = packet.Span[3];
+                        }
+                        parseSuccess = true;
+                        break;
+                    case 0xC2:
+                        if (packet.Length < 4) // Need at least C2 LL LH Code
+                        {
+                            _logger.LogWarning("❓ Connect Server C2 packet too short for code: {Data}", Convert.ToHexString(packet.Span));
+                            return Task.CompletedTask;
+                        }
+                        code = packet.Span[3]; // Code is at index 3 for C2 packets
+                        if (packet.Length >= 5 && ConnectServerSubCodeHolder.ContainsSubCode(code))
+                        {
+                            subCode = packet.Span[4]; // SubCode is at index 4 for C2 packets
+                        }
+                        parseSuccess = true;
+                        break;
+                    default:
+                        _logger.LogWarning("❓ Unknown Connect Server header type: {HeaderType:X2}", headerType);
+                        return Task.CompletedTask;
+                }
+            }
+            catch (IndexOutOfRangeException ex)
+            {
+                _logger.LogError(ex, "💥 Index error during Connect Server header parsing for packet: {Data}", Convert.ToHexString(packet.Span));
+                return Task.CompletedTask;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 General error during Connect Server header parsing.");
+                return Task.CompletedTask;
+            }
+
+            if (!parseSuccess)
+            {
+                _logger.LogWarning("❓ Failed to parse Connect Server packet header: {Data}", Convert.ToHexString(packet.Span));
+                return Task.CompletedTask;
+            }
+
+            _logger.LogDebug("🔎 Parsing CS Packet: Header={HeaderType:X2}, Code={Code:X2}, SubCode={SubCode}",
+                             headerType, code, subCode.HasValue ? subCode.Value.ToString("X2") : "N/A");
+
+            // Dispatch using the same mechanism, but handlers are registered differently or checked based on _isConnectServerRouting
+            return DispatchPacketInternalAsync(packet, code, subCode, headerType);
+        }
+
 
         private Task DispatchPacketInternalAsync(Memory<byte> packet, byte code, byte? subCode, byte headerType)
         {
@@ -56,8 +151,11 @@ namespace MuOnlineConsole
                 return ExecuteHandler(handler, packet, code, lookupSubCode);
             }
 
+            // Fallback for packets with subcodes where only a main code handler exists
             if (lookupSubCode != NoSubCode && _packetHandlers.TryGetValue((code, NoSubCode), out var mainCodeHandler))
             {
+                // Check if this fallback makes sense for the current routing mode
+                // For now, let's assume it might be valid for both, but could be refined.
                 return ExecuteHandler(mainCodeHandler, packet, code, NoSubCode);
             }
 
@@ -74,7 +172,8 @@ namespace MuOnlineConsole
             catch (Exception ex)
             {
                 _logger.LogError(ex, "💥 Exception dispatching handler for {MainCode:X2}-{SubCode:X2}.", code, subCode);
-                if (code == 0xD4 || code == 0x15)
+                // Specific error handling for GS packets
+                if (!_isConnectServerRouting && (code == 0xD4 || code == 0x15)) // ObjectMoved/Walked
                 {
                     _clientState.SignalMovementHandled();
                 }
@@ -84,12 +183,24 @@ namespace MuOnlineConsole
         public Task OnDisconnected()
         {
             _logger.LogWarning("🔌 Disconnected from server.");
-            _clientState.SetInGameStatus(false);
+            // Reset state based on which server we were connected to
+            if (!_isConnectServerRouting) // If disconnected from Game Server
+            {
+                _clientState.SetInGameStatus(false);
+                // Potentially reset to initial state or allow reconnecting?
+            }
+            else // If disconnected from Connect Server
+            {
+                // Handle CS disconnection state if needed
+                _logger.LogInformation("🔌 Disconnected from Connect Server.");
+            }
+            // Consider resetting the routing mode or client state here
             return Task.CompletedTask;
         }
 
         private void RegisterAttributeBasedHandlers()
         {
+            // This registers Game Server handlers
             var methods = this.GetType().GetMethods(BindingFlags.NonPublic | BindingFlags.Instance);
             int count = 0;
             foreach (var method in methods)
@@ -112,12 +223,24 @@ namespace MuOnlineConsole
                 }
                 catch (Exception ex) { _logger.LogError(ex, "💥 Failed to create delegate for handler method {MethodName}. Skipping registration.", method.Name); }
             }
-            _logger.LogInformation("✅ Packet handler registration complete. {Count} handlers registered.", count);
+            _logger.LogInformation("✅ Game Server packet handler registration complete. {Count} handlers registered.", count);
         }
 
-        private bool TryParsePacketHeader(byte[] packet, out byte headerType, out byte code, out byte? subCode, out Memory<byte> packetMemory)
+        private void RegisterConnectServerHandlers()
         {
-            headerType = 0; code = 0; subCode = null; packetMemory = packet;
+            // Manually register CS handlers here for simplicity, or use attributes with a flag/different attribute type
+            // Example:
+            _packetHandlers[(0x00, 0x01)] = HandleHelloAsync; // C1 00 01
+            _packetHandlers[(0xF4, 0x06)] = HandleServerListResponseAsync; // C2 F4 06
+            _packetHandlers[(0xF4, 0x03)] = HandleConnectionInfoResponseAsync; // C1 F4 03
+
+            _logger.LogInformation("✅ Connect Server packet handler registration complete.");
+        }
+
+        private bool TryParsePacketHeader(ReadOnlySpan<byte> packet, out byte headerType, out byte code, out byte? subCode, out Memory<byte> packetMemory)
+        {
+            // Keep original logic for GS packets
+            headerType = 0; code = 0; subCode = null; packetMemory = packet.ToArray(); // Inefficient, but keeps signature. Consider refactoring later.
             if (packet.Length < 3) return false;
             headerType = packet[0];
             try
@@ -132,8 +255,8 @@ namespace MuOnlineConsole
                     case 0xC2:
                     case 0xC4:
                         if (packet.Length < 4) return false;
-                        code = packet[3];
-                        subCode = packet.Length >= 5 && SubCodeHolder.ContainsSubCode(code) ? packet[4] : (byte?)null;
+                        code = packet[3]; // Code is at index 3 for C2/C4 Game Server packets
+                        subCode = packet.Length >= 5 && SubCodeHolder.ContainsSubCode(code) ? packet[4] : (byte?)null; // SubCode is at index 4
                         break;
                     default: _logger.LogWarning("❓ Unknown header type: {HeaderType:X2}", headerType); return false;
                 }
@@ -145,24 +268,86 @@ namespace MuOnlineConsole
 
         private void LogUnhandled(byte code, byte? subCode)
         {
-            _logger.LogWarning("⚠️ Unhandled packet: Code={Code:X2} SubCode={SubCode}", code, subCode.HasValue ? subCode.Value.ToString("X2") : "N/A");
-        }
-
-        private void LogUnexpectedHeader(byte headerType, byte code, byte? subCode)
-        {
-            _logger.LogWarning("❓ Unexpected Header {Header:X2} for packet Code={Code:X2} SubCode={SubCode}", headerType, code, subCode.HasValue ? subCode.Value.ToString("X2") : "N/A");
+            _logger.LogWarning("⚠️ Unhandled packet ({Mode}): Code={Code:X2} SubCode={SubCode}",
+                _isConnectServerRouting ? "CS" : "GS",
+                code, subCode.HasValue ? subCode.Value.ToString("X2") : "N/A");
         }
 
         // ==================================================
-        //  Packet Handlers (Attribute Marked)
+        //  Connect Server Packet Handlers
+        // ==================================================
+        private Task HandleHelloAsync(Memory<byte> packet)
+        {
+            _logger.LogInformation("👋 Received Hello from Connect Server.");
+            // Automatically trigger server list request after receiving Hello
+            _ = Task.Run(() => _clientState.RequestServerList());
+            return Task.CompletedTask;
+        }
+
+        private Task HandleServerListResponseAsync(Memory<byte> packet)
+        {
+            _logger.LogInformation("📊 Received Server List Response.");
+            try
+            {
+                var serverList = new ServerListResponse(packet);
+                var servers = new List<ServerInfo>();
+                ushort serverCount = serverList.ServerCount; // Assuming ServerListResponse has ServerCount
+                _logger.LogInformation("  Server Count: {Count}", serverCount);
+
+                for (int i = 0; i < serverCount; i++)
+                {
+                    // Accessing the struct array - Assuming ServerLoadInfo struct exists
+                    var serverLoadInfo = serverList[i];
+                    var serverInfo = new ServerInfo
+                    {
+                        ServerId = serverLoadInfo.ServerId,
+                        LoadPercentage = serverLoadInfo.LoadPercentage
+                    };
+                    servers.Add(serverInfo);
+                    _logger.LogInformation("  -> Server ID: {Id}, Load: {Load}%", serverInfo.ServerId, serverInfo.LoadPercentage);
+                }
+                _clientState.StoreServerList(servers);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing ServerListResponse packet.");
+            }
+            return Task.CompletedTask;
+        }
+
+        private Task HandleConnectionInfoResponseAsync(Memory<byte> packet)
+        {
+            _logger.LogInformation("🔗 Received Connection Info Response.");
+            try
+            {
+                var connectionInfo = new ConnectionInfo(packet);
+                string ipAddress = connectionInfo.IpAddress;
+                ushort port = connectionInfo.Port;
+                _logger.LogInformation("  -> Game Server Address: {IP}:{Port}", ipAddress, port);
+
+                // Trigger the switch to the game server
+                _clientState.SwitchToGameServer(ipAddress, port);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing ConnectionInfoResponse packet.");
+            }
+            return Task.CompletedTask;
+        }
+
+
+        // ==================================================
+        //  Game Server Packet Handlers
         // ==================================================
 
 #pragma warning disable IDE0051 // Disable warning for unused private members, as they are used by reflection via PacketHandlerAttribute
 
-        [PacketHandler(0xF1, 0x00)]
+        [PacketHandler(0xF1, 0x00)] // Note: This code might conflict with CS Hello if not routed correctly
         private Task HandleGameServerEnteredAsync(Memory<byte> packet)
         {
-            _logger.LogInformation("➡️🚪 Received GameServerEntered (F1, 00).");
+            _logger.LogInformation("➡️🚪 Received GameServerEntered (F1, 00). Requesting Login...");
+            // This is now the point to send the actual login request to the Game Server
+            _clientState.SendLoginRequest();
             return Task.CompletedTask;
         }
 

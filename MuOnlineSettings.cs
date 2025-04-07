@@ -2,10 +2,19 @@ namespace MuOnlineConsole;
 
 public class MuOnlineSettings
 {
-    public string Host { get; set; } = "";
-    public int Port { get; set; }
+    // Connect Server Settings
+    public string ConnectServerHost { get; set; } = "127.0.0.1"; // Default used if missing in JSON
+    public int ConnectServerPort { get; set; } = 44405;       // Default used if missing in JSON
+
+    // Game Server Settings
+    public string GameServerHost { get; set; } = "";
+    public int GameServerPort { get; set; }
+
+    // Account Settings
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
+
+    // Client/Protocol Settings
     public string ProtocolVersion { get; set; } = "Season6";
     public string ClientVersion { get; set; } = "1.04d";
     public string ClientSerial { get; set; } = "0123456789ABCDEF";

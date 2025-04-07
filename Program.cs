@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -7,13 +8,19 @@ namespace MuOnlineConsole
     {
         public static async Task Main(string[] args)
         {
+            Console.OutputEncoding = Encoding.UTF8;
+
             var configuration = new ConfigurationBuilder()
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .Build();
 
             using var loggerFactory = LoggerFactory.Create(builder =>
-                builder.AddSimpleConsole(options => options.TimestampFormat = "HH:mm:ss.fff ")
-                       .SetMinimumLevel(LogLevel.Debug));
+                builder.AddSimpleConsole(options =>
+                {
+                    options.TimestampFormat = "HH:mm:ss.fff ";
+                    options.SingleLine = true; // Optional: Make logs single line
+                })
+                       .SetMinimumLevel(LogLevel.Debug)); // Set desired log level
 
             var settings = configuration.GetSection("MuOnlineSettings").Get<MuOnlineSettings>();
             if (settings == null)
@@ -21,6 +28,20 @@ namespace MuOnlineConsole
                 Console.WriteLine("❌ Failed to load configuration from 'MuOnlineSettings' section.");
                 return;
             }
+
+            // Validate essential settings
+            if (string.IsNullOrWhiteSpace(settings.ConnectServerHost) || settings.ConnectServerPort == 0)
+            {
+                Console.WriteLine("❌ Connect Server host or port not configured correctly in appsettings.json.");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(settings.Username) || string.IsNullOrWhiteSpace(settings.Password))
+            {
+                Console.WriteLine("❌ Username or password not configured correctly in appsettings.json.");
+                return;
+            }
+
+
             var client = new SimpleLoginClient(loggerFactory, settings);
             await using (client)
             {

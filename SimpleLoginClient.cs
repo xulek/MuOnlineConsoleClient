@@ -1,3 +1,4 @@
+using System.Buffers; // Required for ReadOnlySequence<byte>
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network.SimpleModulus;
@@ -16,28 +17,49 @@ namespace MuOnlineConsole
     }
 
     /// <summary>
+    /// Represents the connection state of the client.
+    /// </summary>
+    public enum ClientConnectionState
+    {
+        Initial,
+        ConnectingToConnectServer,
+        ConnectedToConnectServer,
+        RequestingServerList,
+        ReceivedServerList,
+        SelectingServer,
+        RequestingConnectionInfo,
+        ReceivedConnectionInfo,
+        ConnectingToGameServer,
+        ConnectedToGameServer, // Ready to send login
+        Authenticating,
+        SelectingCharacter,
+        InGame,
+        Disconnected
+    }
+
+    /// <summary>
     /// Main client class managing connection, login, character handling and packet routing.
     /// </summary>
     public sealed class SimpleLoginClient : IAsyncDisposable
     {
-        private const string DefaultHost = "192.168.55.220";
-        private const int DefaultPort = 55901;
-        private const string DefaultUsername = "xulek";
-        private const string DefaultPassword = "test1234";
-        private const TargetProtocolVersion DefaultTargetVersion = TargetProtocolVersion.Season6;
-
-        private static readonly byte[] ClientVersion = Encoding.ASCII.GetBytes("1.04d");
-        private static readonly byte[] ClientSerial = Encoding.ASCII.GetBytes("0123456789ABCDEF");
         private static readonly SimpleModulusKeys EncryptKeys = PipelinedSimpleModulusEncryptor.DefaultClientKey;
         private static readonly SimpleModulusKeys DecryptKeys = PipelinedSimpleModulusDecryptor.DefaultClientKey;
         private static readonly byte[] Xor3Keys = DefaultKeys.Xor3Keys;
 
         private readonly ILogger<SimpleLoginClient> _logger;
+        private readonly ILoggerFactory _loggerFactory;
         private readonly ConnectionManager _connectionManager;
         private readonly LoginService _loginService;
         private readonly CharacterService _characterService;
+        private readonly ConnectServerService _connectServerService;
         private readonly PacketRouter _packetRouter;
+        private readonly MuOnlineSettings _settings;
 
+        private ClientConnectionState _currentState = ClientConnectionState.Initial;
+        private List<ServerInfo> _serverList = new();
+        private List<string>? _pendingCharacterSelection = null;
+
+        // Character State (Game Server related)
         private uint _currentHealth = 0;
         private uint _maximumHealth = 1;
         private uint _currentShield = 0;
@@ -61,7 +83,6 @@ namespace MuOnlineConsole
         private readonly string _username;
         private readonly string _password;
         private Dictionary<byte, byte> _serverDirectionMap = new();
-        private List<string>? _pendingCharacterSelection = null;
 
 
         public bool IsInGame => _isInGame;
@@ -71,16 +92,18 @@ namespace MuOnlineConsole
 
         public SimpleLoginClient(ILoggerFactory loggerFactory, MuOnlineSettings settings)
         {
+            _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<SimpleLoginClient>();
+            _settings = settings; // Store settings
 
             var clientVersionBytes = Encoding.ASCII.GetBytes(settings.ClientVersion);
             var clientSerialBytes = Encoding.ASCII.GetBytes(settings.ClientSerial);
             var targetVersion = Enum.Parse<TargetProtocolVersion>(settings.ProtocolVersion, ignoreCase: true);
-            
 
-            _connectionManager = new ConnectionManager(loggerFactory, settings.Host, settings.Port, EncryptKeys, DecryptKeys);
+            _connectionManager = new ConnectionManager(loggerFactory, EncryptKeys, DecryptKeys);
             _loginService = new LoginService(_connectionManager, _logger, clientVersionBytes, clientSerialBytes, Xor3Keys);
             _characterService = new CharacterService(_connectionManager, _logger);
+            _connectServerService = new ConnectServerService(_connectionManager, _loggerFactory.CreateLogger<ConnectServerService>());
             _packetRouter = new PacketRouter(loggerFactory.CreateLogger<PacketRouter>(), _characterService, _loginService, targetVersion, this);
             _serverDirectionMap = settings.DirectionMap;
             _username = settings.Username;
@@ -97,49 +120,192 @@ namespace MuOnlineConsole
             _cancellationTokenSource = new CancellationTokenSource();
             var cancellationToken = _cancellationTokenSource.Token;
 
-            if (await _connectionManager.ConnectAsync(cancellationToken))
+            // Start Command Loop in background
+            var commandLoopTask = Task.Run(() => CommandLoopAsync(cancellationToken), cancellationToken);
+
+            // Start Connection Process
+            await ConnectToConnectServerAsync(cancellationToken);
+
+            // Keep the application running until cancelled or command loop finishes
+            try
             {
-                _connectionManager.Connection.PacketReceived += sequence => new ValueTask(_packetRouter.RoutePacketAsync(sequence));
-                _connectionManager.Connection.Disconnected += () => new ValueTask(_packetRouter.OnDisconnected());
-
-                var commandLoopTask = Task.Run(() => CommandLoopAsync(cancellationToken), cancellationToken);
-
-                await _loginService.SendLoginRequestAsync(_username, _password);
-                _logger.LogInformation("🎮 Client started. Type 'exit' to quit or 'move X Y' to move (after entering the game).");
-
-                try
+                // Wait for either cancellation or the command loop to naturally end (e.g., 'exit' command)
+                await commandLoopTask; // If command loop ends, we should shut down.
+                if (!cancellationToken.IsCancellationRequested)
                 {
-                    await commandLoopTask;
-                }
-                catch (OperationCanceledException)
-                {
-                    _logger.LogInformation("⌨️ Command loop canceled.");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "💥 Error in command loop.");
+                    _cancellationTokenSource.Cancel(); // Ensure shutdown if command loop exited normally
                 }
             }
-            else
+            catch (OperationCanceledException)
             {
-                _logger.LogError("❌ Connection failed.");
+                _logger.LogInformation("🛑 Main execution loop cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Unexpected error in main execution loop.");
+            }
+            finally
+            {
+                if (!_cancellationTokenSource.IsCancellationRequested)
+                {
+                    _cancellationTokenSource.Cancel(); // Ensure cancellation token is set for cleanup
+                }
             }
 
             _logger.LogInformation("Shutting down client...");
         }
 
+        private async Task ConnectToConnectServerAsync(CancellationToken cancellationToken)
+        {
+            _currentState = ClientConnectionState.ConnectingToConnectServer;
+            _packetRouter.SetRoutingMode(true); // Route Connect Server packets
+
+            if (await _connectionManager.ConnectAsync(_settings.ConnectServerHost, _settings.ConnectServerPort, false, cancellationToken)) // Connect Server usually doesn't use encryption
+            {
+                _currentState = ClientConnectionState.ConnectedToConnectServer;
+                _connectionManager.Connection.PacketReceived += HandlePacketAsync;
+                _connectionManager.Connection.Disconnected += HandleDisconnectAsync;
+
+                _logger.LogInformation("✅ Successfully connected to Connect Server. Requesting server list...");
+                _currentState = ClientConnectionState.RequestingServerList;
+                await _connectServerService.RequestServerListAsync();
+            }
+            else
+            {
+                _logger.LogError("❌ Connection to Connect Server failed.");
+                _currentState = ClientConnectionState.Disconnected;
+                _cancellationTokenSource?.Cancel(); // Stop the client if CS connection fails
+            }
+        }
+
+        /// <summary>
+        /// Stores the received server list and prompts the user.
+        /// </summary>
+        public void StoreServerList(List<ServerInfo> servers)
+        {
+            _serverList = servers;
+            _currentState = ClientConnectionState.ReceivedServerList;
+            _logger.LogInformation("📝 Server list received with {Count} servers.", servers.Count);
+            Console.WriteLine("=== Available Servers ===");
+            if (servers.Count == 0)
+            {
+                Console.WriteLine("No servers available.");
+            }
+            else
+            {
+                for (int i = 0; i < servers.Count; i++)
+                {
+                    Console.WriteLine($"  {i + 1}. ID: {servers[i].ServerId}, Load: {servers[i].LoadPercentage}%");
+                }
+            }
+            Console.WriteLine("👉 Type 'connect <number>' (e.g., 'connect 1') to connect to a server.");
+            Console.WriteLine("👉 Or type 'refresh' to request the server list again.");
+        }
+
+        /// <summary>
+        /// Handles the user selecting a server from the list.
+        /// </summary>
+        private async Task HandleServerSelection(ushort serverId)
+        {
+            if (_currentState != ClientConnectionState.ReceivedServerList)
+            {
+                _logger.LogWarning("⚠️ Cannot select server, not in the correct state ({State}).", _currentState);
+                return;
+            }
+
+            _logger.LogInformation("👉 Requesting connection details for Server ID {ServerId}...", serverId);
+            _currentState = ClientConnectionState.RequestingConnectionInfo;
+            await _connectServerService.RequestConnectionInfoAsync(serverId);
+        }
+
+        /// <summary>
+        /// Disconnects from the Connect Server and connects to the specified Game Server.
+        /// </summary>
+        public async void SwitchToGameServer(string host, int port)
+        {
+            if (_currentState != ClientConnectionState.RequestingConnectionInfo) // Should be after receiving info
+            {
+                _logger.LogWarning("⚠️ Received game server info in unexpected state ({State}). Ignoring.", _currentState);
+                // Maybe reset state? For now, just ignore.
+                return;
+            }
+            _currentState = ClientConnectionState.ReceivedConnectionInfo; // Mark as received
+
+            _logger.LogInformation("🔌 Disconnecting from Connect Server...");
+            await _connectionManager.DisconnectAsync(); // This now cleans up internally
+
+            _logger.LogInformation("🔌 Connecting to Game Server {Host}:{Port}...", host, port);
+            _currentState = ClientConnectionState.ConnectingToGameServer;
+            _packetRouter.SetRoutingMode(false); // Route Game Server packets now
+
+            // Re-use the same ConnectionManager instance
+            if (await _connectionManager.ConnectAsync(host, port, true, _cancellationTokenSource?.Token ?? default)) // Game Server uses encryption
+            {
+                _currentState = ClientConnectionState.ConnectedToGameServer;
+                // Re-attach handlers if necessary (DisconnectAsync might clear them)
+                // ConnectionManager's Disconnect/Cleanup should NOT clear external event handlers.
+                // If it does, re-subscribe here:
+                // _connectionManager.Connection.PacketReceived -= HandlePacketAsync; // Unsubscribe previous if needed
+                // _connectionManager.Connection.Disconnected -= HandleDisconnectAsync; // Unsubscribe previous if needed
+                _connectionManager.Connection.PacketReceived += HandlePacketAsync;
+                _connectionManager.Connection.Disconnected += HandleDisconnectAsync;
+
+                _logger.LogInformation("✅ Successfully connected to Game Server. Ready to login.");
+                // Now the HandleGameServerEnteredAsync (F1 00) packet handler should trigger the login.
+                // If the server doesn't send F1 00 automatically, we might need to trigger login here.
+                // Let's assume F1 00 is sent by the GS upon connection.
+            }
+            else
+            {
+                _logger.LogError("❌ Connection to Game Server {Host}:{Port} failed.", host, port);
+                _currentState = ClientConnectionState.Disconnected;
+                _cancellationTokenSource?.Cancel(); // Stop the client
+            }
+        }
+
+        /// <summary>
+        /// Sends the login request to the Game Server.
+        /// Should be called after successfully connecting to the GS.
+        /// </summary>
+        public void SendLoginRequest()
+        {
+            if (_currentState != ClientConnectionState.ConnectedToGameServer)
+            {
+                _logger.LogWarning("⚠️ Cannot send login request, not connected to Game Server or in wrong state ({State}).", _currentState);
+                return;
+            }
+            _currentState = ClientConnectionState.Authenticating;
+            Task.Run(() => _loginService.SendLoginRequestAsync(_username, _password));
+        }
+
+
+        private ValueTask HandlePacketAsync(ReadOnlySequence<byte> sequence)
+        {
+            // Route based on the current mode set in PacketRouter
+            return new ValueTask(_packetRouter.RoutePacketAsync(sequence));
+        }
+
+        private ValueTask HandleDisconnectAsync()
+        {
+            // Let the PacketRouter handle the logic based on its current mode
+            return new ValueTask(_packetRouter.OnDisconnected());
+        }
+
         private async Task CommandLoopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("⌨️ Command loop started. Type 'exit' to quit.");
-            while (!cancellationToken.IsCancellationRequested && IsConnected)
+            while (!cancellationToken.IsCancellationRequested) // Keep loop running even if disconnected, allows reconnect attempts etc.
             {
                 string? commandLine = null;
                 try
                 {
+                    // Use Task.Run to avoid blocking the main thread if Console.In blocks unexpectedly
+                    // *** FIX 1: Await the ValueTask<string?> ***
                     commandLine = await Console.In.ReadLineAsync(cancellationToken);
                 }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex) { _logger.LogError(ex, "Error reading command."); break; }
+                catch (OperationCanceledException) { break; } // Expected when shutting down
+                catch (IOException ex) { _logger.LogError(ex, "Error reading command line input (IO)."); break; }
+                catch (Exception ex) { _logger.LogError(ex, "Error reading command line input."); break; }
 
                 if (cancellationToken.IsCancellationRequested || commandLine == null) break;
 
@@ -148,129 +314,183 @@ namespace MuOnlineConsole
 
                 var command = parts[0].ToLowerInvariant();
 
-                switch (command)
+                // --- General Commands ---
+                if (command == "exit")
                 {
-                    case "exit":
-                        _logger.LogInformation("Received 'exit' command. Shutting down...");
-                        _cancellationTokenSource?.Cancel();
-                        return;
+                    _logger.LogInformation("Received 'exit' command. Shutting down...");
+                    _cancellationTokenSource?.Cancel();
+                    return; // Exit the loop
+                }
 
-                    case "select":
-                        if (_pendingCharacterSelection == null)
-                        {
-                            _logger.LogWarning("No character list available to select from.");
-                            break;
-                        }
-
-                        if (parts.Length != 2 || !int.TryParse(parts[1], out int index) || index < 1 || index > _pendingCharacterSelection.Count)
-                        {
-                            _logger.LogWarning("Usage: select <number> (1-{Max})", _pendingCharacterSelection.Count);
-                            break;
-                        }
-
-                        var selectedName = _pendingCharacterSelection[index - 1];
-                        _logger.LogInformation("🎯 Selected character: {Name}", selectedName);
-                        _characterName = selectedName;
-                        _ = _characterService.SelectCharacterAsync(selectedName);
-                        _pendingCharacterSelection = null;
-                        break;
-
-                    case "move":
-                        if (!IsInGame) { _logger.LogWarning("Cannot move - character is not in game."); continue; }
-                        if (_isWalking) { _logger.LogWarning("🚶 Character is currently walking, cannot use 'move'."); continue; }
-                        if (parts.Length == 3 && byte.TryParse(parts[1], out byte x) && byte.TryParse(parts[2], out byte y))
-                        {
-                            await _characterService.SendInstantMoveRequestAsync(x, y);
-                        }
-                        else { _logger.LogWarning("Invalid 'move' command format. Use: move X Y"); }
-                        break;
-
-                    case "walkto":
-                        if (!IsInGame) { _logger.LogWarning("Cannot walk - character is not in game."); continue; }
-                        if (_isWalking) { _logger.LogWarning("🚶 Character is already moving, please wait."); continue; }
-
-                        if (parts.Length == 3 && byte.TryParse(parts[1], out byte targetX) && byte.TryParse(parts[2], out byte targetY))
-                        {
-                            byte startX = _currentX;
-                            byte startY = _currentY;
-                            var generatedPath = GenerateSimplePathTowards(startX, startY, targetX, targetY);
-
-                            if (generatedPath.Length > 0)
+                // --- Connect Server State Commands ---
+                if (_currentState < ClientConnectionState.ConnectingToGameServer)
+                {
+                    switch (command)
+                    {
+                        case "servers":
+                        case "list":
+                            if (_serverList.Count > 0)
                             {
-                                var translatedPath = generatedPath.Select(TranslateDirection).ToArray();
-
-                                _isWalking = true;
-                                try
-                                {
-                                    byte firstTranslatedStep = translatedPath[0];
-                                    byte animationNumber = 0;
-
-                                    _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
-                                    await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
-
-                                    _logger.LogDebug("🚶 Sending WalkRequest. Client Position: ({CurrentX},{CurrentY}), Target: ({TargetX},{TargetY}), Original Path: [{OrigPath}], Translated Path: [{TransPath}]",
-                                                     _currentX, _currentY, targetX, targetY, string.Join(",", generatedPath), string.Join(",", translatedPath));
-                                    await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedPath);
-                                }
-                                catch (OperationCanceledException) { _isWalking = false; break; }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, "Error during walkto sequence.");
-                                    _isWalking = false;
-                                }
+                                StoreServerList(_serverList); // Re-display the list
                             }
-                            else { _logger.LogInformation("🚶 Already at target location or no path."); }
-                        }
-                        else { _logger.LogWarning("Invalid 'walkto' format. Use: walkto X Y"); }
-                        break;
-
-                    case "walk":
-                        if (!IsInGame) { _logger.LogWarning("Cannot walk - character is not in game."); continue; }
-                        if (_isWalking) { _logger.LogWarning("🚶 Character is already moving, please wait."); continue; }
-
-                        if (parts.Length > 1)
-                        {
-                            var directions = parts.Skip(1)
-                                                .Select(p => byte.TryParse(p, out byte dir) && dir <= 7 ? (byte?)dir : null)
-                                                .Where(d => d.HasValue)
-                                                .Select(d => d.Value)
-                                                .ToArray();
-
-                            if (directions.Length > 0)
+                            else
                             {
-                                var translatedDirections = directions.Select(TranslateDirection).ToArray();
-
-                                _isWalking = true;
-                                try
-                                {
-                                    byte firstTranslatedStep = translatedDirections[0];
-                                    byte animationNumber = 0;
-
-                                    _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
-                                    await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
-
-                                    _logger.LogInformation("🚶 Sending WalkRequest packet with start ({StartX},{StartY}), {Steps} steps (translated)...", _currentX, _currentY, translatedDirections.Length);
-                                    await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedDirections);
-                                }
-                                catch (OperationCanceledException) { _isWalking = false; break; }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, "Error during walk sequence.");
-                                    _isWalking = false;
-                                }
+                                _logger.LogWarning("No server list available. Use 'refresh'.");
                             }
-                            else { _logger.LogWarning("Invalid 'walk' arguments. Use numeric directions 0-7."); }
-                        }
-                        else
-                        {
-                            _logger.LogWarning("Invalid 'walk' command format. Use: walk <dir1> [dir2] ...");
-                            _logger.LogInformation("Directions: 0:W, 1:SW, 2:S, 3:SE, 4:E, 5:NE, 6:N, 7:NW");
-                        }
-                        break;
+                            break;
 
-                    default:
-                        _logger.LogWarning("❓ Unknown command: {Command}", command);
-                        break;
+                        case "refresh":
+                            if (_currentState == ClientConnectionState.ConnectedToConnectServer || _currentState == ClientConnectionState.ReceivedServerList)
+                            {
+                                _logger.LogInformation("Requesting updated server list...");
+                                _currentState = ClientConnectionState.RequestingServerList;
+                                await _connectServerService.RequestServerListAsync();
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Cannot refresh server list, not connected to Connect Server.");
+                            }
+                            break;
+
+                        case "connect":
+                            if (_currentState != ClientConnectionState.ReceivedServerList)
+                            {
+                                _logger.LogWarning("Please wait for the server list or use 'refresh'.");
+                                break;
+                            }
+                            if (parts.Length != 2 || !int.TryParse(parts[1], out int index) || index < 1 || index > _serverList.Count)
+                            {
+                                _logger.LogWarning("Usage: connect <number> (1-{Max})", _serverList.Count);
+                                break;
+                            }
+                            var selectedServer = _serverList[index - 1];
+                            await HandleServerSelection(selectedServer.ServerId);
+                            break;
+
+                        default:
+                            _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
+                            break;
+                    }
+                }
+                // --- Game Server State Commands ---
+                else if (_currentState >= ClientConnectionState.ConnectedToGameServer)
+                {
+                    switch (command)
+                    {
+                        case "select": // Character Selection
+                            if (_pendingCharacterSelection == null)
+                            {
+                                _logger.LogWarning("No character list available to select from.");
+                                break;
+                            }
+                            if (parts.Length != 2 || !int.TryParse(parts[1], out int index) || index < 1 || index > _pendingCharacterSelection.Count)
+                            {
+                                _logger.LogWarning("Usage: select <number> (1-{Max})", _pendingCharacterSelection.Count);
+                                break;
+                            }
+                            var selectedName = _pendingCharacterSelection[index - 1];
+                            _logger.LogInformation("🎯 Selected character: {Name}", selectedName);
+                            _characterName = selectedName; // Store the name
+                            _currentState = ClientConnectionState.SelectingCharacter;
+                            _ = _characterService.SelectCharacterAsync(selectedName);
+                            _pendingCharacterSelection = null; // Clear pending list
+                            break;
+
+                        case "move":
+                            if (!IsInGame) { _logger.LogWarning("Cannot move - character is not in game."); continue; }
+                            if (_isWalking) { _logger.LogWarning("🚶 Character is currently walking, cannot use 'move'."); continue; }
+                            if (parts.Length == 3 && byte.TryParse(parts[1], out byte x) && byte.TryParse(parts[2], out byte y))
+                            {
+                                await _characterService.SendInstantMoveRequestAsync(x, y);
+                            }
+                            else { _logger.LogWarning("Invalid 'move' command format. Use: move X Y"); }
+                            break;
+
+                        case "walkto":
+                            if (!IsInGame) { _logger.LogWarning("Cannot walk - character is not in game."); continue; }
+                            if (_isWalking) { _logger.LogWarning("🚶 Character is already moving, please wait."); continue; }
+                            if (parts.Length == 3 && byte.TryParse(parts[1], out byte targetX) && byte.TryParse(parts[2], out byte targetY))
+                            {
+                                byte startX = _currentX;
+                                byte startY = _currentY;
+                                var generatedPath = GenerateSimplePathTowards(startX, startY, targetX, targetY);
+
+                                if (generatedPath.Length > 0)
+                                {
+                                    var translatedPath = generatedPath.Select(TranslateDirection).ToArray();
+                                    _isWalking = true;
+                                    try
+                                    {
+                                        byte firstTranslatedStep = translatedPath[0];
+                                        byte animationNumber = 0; // Default walk animation?
+                                        _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
+                                        await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
+
+                                        _logger.LogDebug("🚶 Sending WalkRequest. Client Position: ({CurrentX},{CurrentY}), Target: ({TargetX},{TargetY}), Original Path: [{OrigPath}], Translated Path: [{TransPath}]",
+                                                         _currentX, _currentY, targetX, targetY, string.Join(",", generatedPath), string.Join(",", translatedPath));
+                                        await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedPath);
+                                    }
+                                    catch (OperationCanceledException) { _isWalking = false; break; }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(ex, "Error during walkto sequence.");
+                                        _isWalking = false;
+                                    }
+                                }
+                                else { _logger.LogInformation("🚶 Already at target location or no path."); }
+                            }
+                            else { _logger.LogWarning("Invalid 'walkto' format. Use: walkto X Y"); }
+                            break;
+
+                        case "walk":
+                            if (!IsInGame) { _logger.LogWarning("Cannot walk - character is not in game."); continue; }
+                            if (_isWalking) { _logger.LogWarning("🚶 Character is already moving, please wait."); continue; }
+                            if (parts.Length > 1)
+                            {
+                                var directions = parts.Skip(1)
+                                                    .Select(p => byte.TryParse(p, out byte dir) && dir <= 7 ? (byte?)dir : null)
+                                                    .Where(d => d.HasValue)
+                                                    .Select(d => d.Value)
+                                                    .ToArray();
+
+                                if (directions.Length > 0)
+                                {
+                                    var translatedDirections = directions.Select(TranslateDirection).ToArray();
+                                    _isWalking = true;
+                                    try
+                                    {
+                                        byte firstTranslatedStep = translatedDirections[0];
+                                        byte animationNumber = 0; // Default walk animation?
+                                        _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
+                                        await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
+
+                                        _logger.LogInformation("🚶 Sending WalkRequest packet with start ({StartX},{StartY}), {Steps} steps (translated)...", _currentX, _currentY, translatedDirections.Length);
+                                        await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedDirections);
+                                    }
+                                    catch (OperationCanceledException) { _isWalking = false; break; }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogError(ex, "Error during walk sequence.");
+                                        _isWalking = false;
+                                    }
+                                }
+                                else { _logger.LogWarning("Invalid 'walk' arguments. Use numeric directions 0-7."); }
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Invalid 'walk' command format. Use: walk <dir1> [dir2] ...");
+                                _logger.LogInformation("Directions: 0:W, 1:SW, 2:S, 3:SE, 4:E, 5:NE, 6:N, 7:NW");
+                            }
+                            break;
+
+                        default:
+                            _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
+                            break;
+                    }
+                }
+                else // Disconnected or Initial state
+                {
+                    _logger.LogWarning("❓ Not connected. Available commands: 'exit'.");
                 }
             }
             _logger.LogInformation("⌨️ Command loop ended.");
@@ -332,24 +552,36 @@ namespace MuOnlineConsole
 
                 if (dx == 0 && dy == 0)
                 {
-                    break;
+                    break; // Reached target
                 }
 
-                byte bestDirection = 0xFF;
+                byte bestDirection = 0xFF; // Invalid direction
 
-                if (dx > 0 && dy > 0) bestDirection = 3;
-                else if (dx < 0 && dy > 0) bestDirection = 1;
-                else if (dx > 0 && dy < 0) bestDirection = 5;
-                else if (dx < 0 && dy < 0) bestDirection = 7;
-                else if (dx > 0) bestDirection = 4;
-                else if (dx < 0) bestDirection = 0;
-                else if (dy > 0) bestDirection = 2;
-                else if (dy < 0) bestDirection = 6;
+                // Determine the best direction based on the largest difference
+                if (Math.Abs(dx) > Math.Abs(dy))
+                {
+                    if (dx > 0) bestDirection = 4; // East
+                    else bestDirection = 0; // West
+                }
+                else if (Math.Abs(dy) > Math.Abs(dx))
+                {
+                    if (dy > 0) bestDirection = 2; // South
+                    else bestDirection = 6; // North
+                }
+                else // Diagonal movement if dx and dy are equal non-zero
+                {
+                    if (dx > 0 && dy > 0) bestDirection = 3; // SE
+                    else if (dx < 0 && dy > 0) bestDirection = 1; // SW
+                    else if (dx > 0 && dy < 0) bestDirection = 5; // NE
+                    else if (dx < 0 && dy < 0) bestDirection = 7; // NW
+                }
+
 
                 if (bestDirection <= 7)
                 {
                     path.Add(bestDirection);
 
+                    // Update current position based on the chosen direction
                     switch (bestDirection)
                     {
                         case 0: currentX--; break;
@@ -365,36 +597,27 @@ namespace MuOnlineConsole
                 else
                 {
                     _logger.LogWarning("Could not determine direction from ({curX},{curY}) to ({tarX},{tarY})", currentX, currentY, targetX, targetY);
-                    break;
+                    break; // Should not happen if dx or dy is non-zero
                 }
             }
 
             return path.ToArray();
         }
 
-        private (byte X, byte Y) CalculateEndPosition(byte startX, byte startY, byte[] path)
+        /// <summary>
+        /// Requests the server list from the Connect Server.
+        /// </summary>
+        public Task RequestServerList()
         {
-            int currentX = startX;
-            int currentY = startY;
-
-            foreach (byte direction in path)
+            if (_currentState != ClientConnectionState.ConnectedToConnectServer && _currentState != ClientConnectionState.ReceivedServerList)
             {
-                switch (direction)
-                {
-                    case 0: currentX--; break;
-                    case 1: currentX--; currentY++; break;
-                    case 2: currentY++; break;
-                    case 3: currentX++; currentY++; break;
-                    case 4: currentX++; break;
-                    case 5: currentX++; currentY--; break;
-                    case 6: currentY--; break;
-                    case 7: currentX--; currentY--; break;
-                }
-                currentX = Math.Clamp(currentX, 0, 255);
-                currentY = Math.Clamp(currentY, 0, 255);
+                _logger.LogWarning("⚠️ Cannot request server list, not connected to Connect Server or in wrong state ({State}).", _currentState);
+                return Task.CompletedTask;
             }
 
-            return ((byte)currentX, (byte)currentY);
+            _logger.LogInformation("Requesting server list...");
+            _currentState = ClientConnectionState.RequestingServerList;
+            return _connectServerService.RequestServerListAsync();
         }
 
         public void SetInGameStatus(bool inGame)
@@ -405,10 +628,15 @@ namespace MuOnlineConsole
             {
                 if (inGame)
                 {
+                    _currentState = ClientConnectionState.InGame;
                     _logger.LogInformation("🟢 Character is now in-game. You can enter commands (e.g., 'move X Y').");
                 }
                 else
                 {
+                    // If we were in game and now we are not, it means we left the game world.
+                    // Reset state appropriately, maybe back to character selection or disconnected.
+                    // For now, let's assume disconnected if not explicitly selecting character again.
+                    _currentState = ClientConnectionState.ConnectedToGameServer; // Or Disconnected? Needs refinement based on logout packet handling
                     _logger.LogInformation("🚪 Character has left the game world.");
                 }
             }
@@ -493,7 +721,14 @@ namespace MuOnlineConsole
         {
             try
             {
-                Console.Title = $"MU Client - {_characterName} | HP: {_currentHealth}/{_maximumHealth} | SD: {_currentShield}/{_maximumShield} | Mana: {_currentMana}/{_maximumMana} | AG: {_currentAbility}/{_maximumAbility}";
+                string stateInfo = _currentState switch
+                {
+                    ClientConnectionState.InGame => $"HP: {_currentHealth}/{_maximumHealth} | SD: {_currentShield}/{_maximumShield} | Mana: {_currentMana}/{_maximumMana} | AG: {_currentAbility}/{_maximumAbility}",
+                    ClientConnectionState.ReceivedServerList => "Select Server",
+                    ClientConnectionState.ConnectedToGameServer => "Select Character",
+                    _ => _currentState.ToString()
+                };
+                Console.Title = $"MU Client - {_characterName} | {stateInfo}";
             }
             catch (Exception ex)
             {
@@ -503,7 +738,9 @@ namespace MuOnlineConsole
 
         public async ValueTask DisposeAsync()
         {
+            _cancellationTokenSource?.Cancel(); // Ensure cancellation is requested
             await _connectionManager.DisposeAsync();
+            _cancellationTokenSource?.Dispose();
             _logger.LogInformation("🛑 Client stopped.");
         }
     }
