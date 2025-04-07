@@ -6,7 +6,8 @@ using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network;
 using MUnique.OpenMU.Network.Packets;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
-using MUnique.OpenMU.Network.Packets.ConnectServer; // Add Connect Server namespace
+using MUnique.OpenMU.Network.Packets.ConnectServer;
+using static MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped; // Add Connect Server namespace
 
 namespace MuOnlineConsole
 {
@@ -183,10 +184,13 @@ namespace MuOnlineConsole
         public Task OnDisconnected()
         {
             _logger.LogWarning("🔌 Disconnected from server.");
+            _clientState.ClearScope(true); // Clear everything on disconnect
+            _clientState.SetInGameStatus(false);
             // Reset state based on which server we were connected to
             if (!_isConnectServerRouting) // If disconnected from Game Server
             {
                 _clientState.SetInGameStatus(false);
+                _logger.LogInformation("🔌 Disconnected from Game Server. State reset.");
                 // Potentially reset to initial state or allow reconnecting?
             }
             else // If disconnected from Connect Server
@@ -842,26 +846,42 @@ namespace MuOnlineConsole
             try
             {
                 byte posX = 0, posY = 0;
+                ushort mapId = 0xFFFF; // Use ushort for S6 compatibility
+                bool isActualMapChange = false;
+
                 switch (TargetVersion)
                 {
                     case TargetProtocolVersion.Season6:
                         var mapChangeS6 = new MapChanged(packet);
+                        mapId = mapChangeS6.MapNumber;
                         posX = mapChangeS6.PositionX;
                         posY = mapChangeS6.PositionY;
-                        _logger.LogInformation("🗺️ Received MapChanged (S6): MapNumber={MapNumber}, Pos=({X},{Y}), IsMapChange={IsChange}", mapChangeS6.MapNumber, mapChangeS6.PositionX, mapChangeS6.PositionY, mapChangeS6.IsMapChange);
+                        isActualMapChange = mapChangeS6.IsMapChange;
+                        _logger.LogInformation("🗺️ Received MapChanged (S6): MapNumber={MapNumber}, Pos=({X},{Y}), IsMapChange={IsChange}", mapChangeS6.MapNumber, posX, posY, isActualMapChange);
                         break;
                     case TargetProtocolVersion.Version097:
                     case TargetProtocolVersion.Version075:
                         var mapChangeLegacy = new MapChanged075(packet);
+                        mapId = mapChangeLegacy.MapNumber; // Implicit conversion might work, or cast if needed
                         posX = mapChangeLegacy.PositionX;
                         posY = mapChangeLegacy.PositionY;
-                        _logger.LogInformation("🗺️ Received MapChanged ({Version}): MapNumber={MapNumber}, Pos=({X},{Y}), IsMapChange={IsChange}", TargetVersion, mapChangeLegacy.MapNumber, mapChangeLegacy.PositionX, mapChangeLegacy.PositionY, mapChangeLegacy.IsMapChange);
+                        isActualMapChange = mapChangeLegacy.IsMapChange;
+                        _logger.LogInformation("🗺️ Received MapChanged ({Version}): MapNumber={MapNumber}, Pos=({X},{Y}), IsMapChange={IsChange}", TargetVersion, mapId, posX, posY, isActualMapChange);
                         break;
                     default:
                         _logger.LogWarning("❓ Unsupported protocol version ({Version}) for MapChanged.", TargetVersion);
                         break;
                 }
-                if (posX != 0 || posY != 0) { _clientState.SetPosition(posX, posY); }
+
+                if (isActualMapChange) // Only clear scope on actual map changes, not teleports within map
+                {
+                    _clientState.ClearScope(false); // Clear others
+                }
+
+                if (posX != 0 || posY != 0) // Update position regardless
+                {
+                    _clientState.SetPosition(posX, posY);
+                }
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MapChanged (1C, 0F)."); }
             return Task.CompletedTask;
@@ -1094,6 +1114,8 @@ namespace MuOnlineConsole
                             }
                             ReadOnlySpan<byte> baseCharReadOnlySpan = packetSpanS6.Slice(currentOffset, baseCharacterDataSizeS6);
                             ushort id = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(baseCharReadOnlySpan.Slice(0, 2));
+                            byte x = baseCharReadOnlySpan[2];
+                            byte y = baseCharReadOnlySpan[3];
                             string name = packet.Span.Slice(currentOffset + 22, 10).ExtractString(0, 10, Encoding.UTF8);
                             byte effectCount = baseCharReadOnlySpan[baseCharacterDataSizeS6 - 1];
                             int fullCharacterSize = baseCharacterDataSizeS6 + effectCount;
@@ -1103,6 +1125,8 @@ namespace MuOnlineConsole
                                 _logger.LogWarning("Insufficient data for full character {Index} (with {EffectCount} effects) in AddCharactersToScope (S6). Offset: {Offset}, Required: {Required}, Length: {Length}", i, effectCount, currentOffset, fullCharacterSize, packetSpanS6.Length);
                                 break;
                             }
+
+                            _clientState.AddOrUpdatePlayerInScope(id, x, y, name);
 
                             _logger.LogDebug("  -> Character in scope (S6): Index={Index}, ID={Id:X4}, Name='{Name}', Effects={EffectCount}, Size={Size}", i, id, name, effectCount, fullCharacterSize);
                             if (name == characterNameToFind)
@@ -1118,6 +1142,7 @@ namespace MuOnlineConsole
                         for (int i = 0; i < scope097.CharacterCount; i++)
                         {
                             var c = scope097[i];
+                            _clientState.AddOrUpdatePlayerInScope(c.Id, c.CurrentPositionX, c.CurrentPositionY, c.Name);
                             _logger.LogDebug("  -> Character in scope (0.97): ID={Id:X4}, Name='{Name}'", c.Id, c.Name);
                             if (c.Name == characterNameToFind) foundCharacterId = c.Id;
                         }
@@ -1128,6 +1153,7 @@ namespace MuOnlineConsole
                         for (int i = 0; i < scope075.CharacterCount; i++)
                         {
                             var c = scope075[i];
+                            _clientState.AddOrUpdatePlayerInScope(c.Id, c.CurrentPositionX, c.CurrentPositionY, c.Name);
                             _logger.LogDebug("  -> Character in scope (0.75): ID={Id:X4}, Name='{Name}'", c.Id, c.Name);
                             if (c.Name == characterNameToFind) foundCharacterId = c.Id;
                         }
@@ -1156,14 +1182,32 @@ namespace MuOnlineConsole
                     case TargetProtocolVersion.Season6:
                         var scopeS6 = new AddNpcsToScope(packet);
                         _logger.LogInformation("🤖 Received AddNpcToScope (S6): {Count} NPC.", scopeS6.NpcCount);
+                        for (int i = 0; i < scopeS6.NpcCount; i++)
+                        {
+                            var npc = scopeS6[i];
+                            _clientState.AddOrUpdateNpcInScope(npc.Id, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // <--- Added call
+                            _logger.LogDebug("  -> NPC in scope (S6): ID={Id:X4}, Type={Type}, Pos=({X},{Y})", npc.Id, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
+                        }
                         break;
                     case TargetProtocolVersion.Version097:
                         var scope097 = new AddNpcsToScope095(packet);
                         _logger.LogInformation("🤖 Received AddNpcToScope (0.97): {Count} NPC.", scope097.NpcCount);
+                        for (int i = 0; i < scope097.NpcCount; i++)
+                        {
+                            var npc = scope097[i];
+                            _clientState.AddOrUpdateNpcInScope(npc.Id, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // <--- Added call
+                            _logger.LogDebug("  -> NPC in scope (0.97): ID={Id:X4}, Type={Type}, Pos=({X},{Y})", npc.Id, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
+                        }
                         break;
                     case TargetProtocolVersion.Version075:
                         var scope075 = new AddNpcsToScope075(packet);
                         _logger.LogInformation("🤖 Received AddNpcToScope (0.75): {Count} NPC.", scope075.NpcCount);
+                        for (int i = 0; i < scope075.NpcCount; i++)
+                        {
+                            var npc = scope075[i];
+                            _clientState.AddOrUpdateNpcInScope(npc.Id, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // <--- Added call
+                            _logger.LogDebug("  -> NPC in scope (0.75): ID={Id:X4}, Type={Type}, Pos=({X},{Y})", npc.Id, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
+                        }
                         break;
                     default:
                         _logger.LogWarning("❓ Unsupported protocol version ({Version}) for AddNpcToScope.", TargetVersion);
@@ -1174,7 +1218,284 @@ namespace MuOnlineConsole
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x15, NoSubCode)]
+        [PacketHandler(0x20, NoSubCode)]
+        private Task HandleItemsDroppedAsync(Memory<byte> packet)
+        {
+            try
+            {
+                // Define the size of the fixed part BEFORE the item list starts
+                const int ItemsDroppedFixedHeaderSize = 4; // C2 Header size
+                const int ItemsDroppedFixedPrefixSize = ItemsDroppedFixedHeaderSize + 1; // Header + ItemCount byte
+
+                if (TargetVersion >= TargetProtocolVersion.Season6) // Assuming 0.97+ uses similar structure to S6 for 0x20
+                {
+                    if (packet.Length < ItemsDroppedFixedPrefixSize)
+                    {
+                        _logger.LogWarning("⚠️ ItemsDropped packet (0x20) too short. Length: {Length}", packet.Length);
+                        return Task.CompletedTask;
+                    }
+
+                    var droppedItems = new ItemsDropped(packet); // Use the S6 struct
+                    _logger.LogInformation("💰 Received ItemsDropped (S6/0.97): {Count} item(s).", droppedItems.ItemCount);
+
+                    int currentOffset = ItemsDroppedFixedPrefixSize; // Start reading items after Header + ItemCount
+                    for (int i = 0; i < droppedItems.ItemCount; i++)
+                    {
+                        // --- Calculate structLength dynamically ---
+                        // We need to know the item data length for THIS item.
+                        // This is complex without parsing the item data itself to know its real size.
+                        // For robust parsing, one would typically read the base DroppedItem,
+                        // then parse the ItemData within it to determine its actual size,
+                        // then advance the offset.
+
+                        // --- Simplified Approach (Less Robust) ---
+                        // Attempt to guess length IF only one item exists in the packet.
+                        // This WILL FAIL if multiple items with different data lengths are sent.
+                        int itemDataLenGuess = -1;
+                        int currentStructSize;
+                        if (droppedItems.ItemCount == 1)
+                        {
+                            itemDataLenGuess = packet.Length - currentOffset - MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(0);
+                            if (itemDataLenGuess < 0)
+                            {
+                                _logger.LogWarning("  -> Invalid calculated item data length ({Length}) for single item. Skipping.", itemDataLenGuess);
+                                break;
+                            }
+                            currentStructSize = MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(itemDataLenGuess);
+                        }
+                        else
+                        {
+                            // We cannot reliably determine the size for multiple items without full parsing.
+                            // We have to make an assumption or skip. Let's assume a default small size or log and skip.
+                            // TODO: Implement proper item size detection based on item type/data.
+                            _logger.LogWarning("  -> Cannot reliably parse multiple items of potentially variable size in ItemsDropped (0x20). Skipping details for item {Index}.", i);
+                            // Or, if you know the MINIMUM item data size (e.g., 7 bytes for older versions?), use that:
+                            // itemDataLenGuess = 7; // Example assumption
+                            // currentStructSize = ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(itemDataLenGuess);
+                            break; // Exit loop for now if multiple items and unknown size
+                        }
+
+                        if (currentOffset + currentStructSize > packet.Length)
+                        {
+                            _logger.LogWarning("  -> Packet too short for DroppedItem {Index}. Offset: {Offset}, Required: {Required}, TotalLength: {Total}", i, currentOffset, currentStructSize, packet.Length);
+                            break;
+                        }
+
+                        // Slice the memory for the current item struct
+                        var itemMemory = packet.Slice(currentOffset, currentStructSize);
+                        var item = new MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem(itemMemory); // Use the sub-struct
+
+                        // Process the item
+                        _clientState.AddOrUpdateItemInScope(item.Id, item.PositionX, item.PositionY, item.ItemData);
+                        _logger.LogDebug("  -> Dropped Item (S6/0.97): ID={Id:X4}, Pos=({X},{Y}), Fresh={Fresh}, DataLen={DataLen}", item.Id, item.PositionX, item.PositionY, item.IsFreshDrop, item.ItemData.Length);
+
+                        // Advance the offset
+                        currentOffset += currentStructSize;
+                    }
+                }
+                else if (TargetVersion == TargetProtocolVersion.Version075)
+                {
+                    // Use MoneyDropped075 struct for items too in 0.75 for packet 0x20
+                    if (packet.Length < MoneyDropped075.Length) // Check against the minimum size of THIS struct
+                    {
+                        _logger.LogWarning("⚠️ Dropped Object packet (0.75, 0x20) too short. Length: {Length}", packet.Length);
+                        return Task.CompletedTask;
+                    }
+
+                    var droppedObjectLegacy = new MoneyDropped075(packet);
+                    _logger.LogInformation("💰 Received Dropped Object (0.75): Count={Count}.", droppedObjectLegacy.ItemCount);
+
+                    // 0.75 usually sends one item/money drop per packet for 0x20
+                    if (droppedObjectLegacy.ItemCount == 1)
+                    {
+                        ushort id = droppedObjectLegacy.Id;
+                        byte x = droppedObjectLegacy.PositionX;
+                        byte y = droppedObjectLegacy.PositionY;
+
+                        // Check if it's money based on known item group/index for money
+                        // The MoneyDropped075 structure itself has MoneyGroup/MoneyNumber properties
+                        if (droppedObjectLegacy.MoneyGroup == 14 && droppedObjectLegacy.MoneyNumber == 15)
+                        {
+                            uint amount = droppedObjectLegacy.Amount; // Use the extension method from MoneyDropped.txt
+                            _clientState.AddOrUpdateMoneyInScope(id, x, y, amount);
+                            _logger.LogDebug("  -> Dropped Money (0.75): ID={Id:X4}, Pos=({X},{Y}), Amount={Amount}", id, x, y, amount);
+                        }
+                        else
+                        {
+                            // It's an item. The item data is embedded within the MoneyDropped075 structure's layout.
+                            // We need to extract the relevant part. The MoneyDropped075 structure has specific offsets.
+                            // The item data for 0.75 item structure (usually 7 bytes) starts conceptually after the coordinates (index 8).
+                            // Let's assume the item data occupies bytes 9 through 15 (total 7 bytes) within the MoneyDropped075 structure.
+                            const int itemDataOffset = 9; // Offset within the MoneyDropped075 structure
+                            const int itemDataLength075 = 7; // Standard 0.75 item data length
+                            if (MoneyDropped075.Length >= itemDataOffset + itemDataLength075)
+                            {
+                                ReadOnlySpan<byte> itemData = packet.Span.Slice(itemDataOffset, itemDataLength075);
+                                _clientState.AddOrUpdateItemInScope(id, x, y, itemData);
+                                _logger.LogDebug("  -> Dropped Item (0.75): ID={Id:X4}, Pos=({X},{Y}), Data={Data}", id, x, y, Convert.ToHexString(itemData));
+                            }
+                            else
+                            {
+                                _logger.LogWarning("  -> Could not extract expected item data from Dropped Object packet (0.75).");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("  -> Dropped Object (0.75): Multiple objects in one packet not handled.");
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("❓ Unsupported protocol version ({Version}) for ItemsDropped (20).", TargetVersion);
+                }
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                // Catch index errors which are common with incorrect length calculations
+                _logger.LogError(ex, "💥 Index/Range error parsing ItemsDropped (20). Packet Length: {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
+            }
+            catch (Exception ex) { _logger.LogError(ex, "💥 General error parsing ItemsDropped (20). Packet: {PacketData}", Convert.ToHexString(packet.Span)); }
+            return Task.CompletedTask;
+        }
+
+        [PacketHandler(0x21, NoSubCode)] // C2 21 00 - ItemDropRemoved
+        private Task HandleItemDropRemovedAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (TargetVersion < TargetProtocolVersion.Version097) // Assume 0.97+ uses S6 structure
+                {
+                    _logger.LogWarning("⚠️ ItemDropRemoved (0x21) handling may differ for version {Version}. Assuming S6+ structure.", TargetVersion);
+                    // Potentially add specific handling for older versions if their 0x21 structure is different
+                }
+
+                const int ItemDropRemovedFixedHeaderSize = 4; // C2 Header size
+                const int ItemDropRemovedFixedPrefixSize = ItemDropRemovedFixedHeaderSize + 1; // Header + ItemCount byte
+                const int ItemIdSize = 2; // Size of each DroppedItemId struct
+
+                if (packet.Length < ItemDropRemovedFixedPrefixSize)
+                {
+                    _logger.LogWarning("⚠️ ItemDropRemoved packet (0x21) too short. Length: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var itemDropRemoved = new ItemDropRemoved(packet); // Use the S6 struct
+                byte count = itemDropRemoved.ItemCount;
+                _logger.LogInformation("🗑️ Received ItemDropRemoved: {Count} item(s).", count);
+
+                if (packet.Length < ItemDropRemovedFixedPrefixSize + count * ItemIdSize)
+                {
+                    _logger.LogWarning("⚠️ ItemDropRemoved packet (0x21) seems too short for {Count} items. Length: {Length}", count, packet.Length);
+                    count = (byte)((packet.Length - ItemDropRemovedFixedPrefixSize) / ItemIdSize);
+                    _logger.LogWarning("   -> Adjusting count to {AdjustedCount} based on length.", count);
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    try
+                    {
+                        var droppedItemIdStruct = itemDropRemoved[i]; // Access struct within the packet
+                        ushort idToRemoveFromServer = droppedItemIdStruct.Id; // Get the ID sent by the server
+
+                        // --- SERVER BUG WORKAROUND START ---
+                        // Some servers incorrectly send a generic ID (like 1 or 2) in the 0x21 packet
+                        // instead of the actual item ID (like 8001, 8002).
+                        // This workaround attempts to guess the correct item ID *only* if:
+                        // 1. The server sent a suspicious low ID (e.g., <= 10).
+                        // 2. This packet contains only one removal instruction (count == 1).
+                        // 3. There is exactly one Item or Money object currently in the client's scope.
+                        // THIS IS UNRELIABLE and should be fixed on the server!
+                        ushort actualIdToRemove = idToRemoveFromServer; // Start with the ID from the server
+                        bool usedWorkaround = false;
+
+                        if (idToRemoveFromServer <= 10 && count == 1) // Condition 1 & 2
+                        {
+                            var itemsInScope = _clientState.GetScopeItems(ScopeObjectType.Item).ToList();
+                            var moneyInScope = _clientState.GetScopeItems(ScopeObjectType.Money).ToList();
+
+                            if (itemsInScope.Count + moneyInScope.Count == 1) // Condition 3
+                            {
+                                ScopeObject? singleObject = itemsInScope.FirstOrDefault() ?? moneyInScope.FirstOrDefault();
+                                if (singleObject != null)
+                                {
+                                    actualIdToRemove = singleObject.Id; // Assume this single object is the one to remove
+                                    usedWorkaround = true;
+                                    _logger.LogWarning("🔧 Applying workaround for ItemDropRemoved: Server sent ID {ServerId:X4}, but only one item/money ({ActualId:X4}) is in scope. Attempting removal of {ActualId:X4}.",
+                                        idToRemoveFromServer, actualIdToRemove, actualIdToRemove);
+                                }
+                            }
+                            else if (itemsInScope.Count + moneyInScope.Count > 1)
+                            {
+                                _logger.LogWarning("🔧 Workaround for ItemDropRemoved skipped: Server sent suspicious ID {ServerId:X4}, but multiple ({Count}) items/money exist in scope. Cannot determine correct target.",
+                                     idToRemoveFromServer, itemsInScope.Count + moneyInScope.Count);
+                            }
+                        }
+                        // --- SERVER BUG WORKAROUND END ---
+
+
+                        // Attempt removal using the potentially corrected ID
+                        _clientState.RemoveObjectFromScope(actualIdToRemove); // Use actualIdToRemove
+
+                        if (usedWorkaround)
+                        {
+                            _logger.LogDebug("  -> Removal attempted using WORKAROUND ID {Id:X4}.", actualIdToRemove);
+                        }
+                        else
+                        {
+                            _logger.LogDebug("  -> Removing Item ID {Id:X4} (received from server).", actualIdToRemove);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "💥 Error processing item removal at index {Index} in ItemDropRemoved (21).", i);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing ItemDropRemoved (21). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
+            return Task.CompletedTask;
+        }
+
+        [PacketHandler(0x2F, NoSubCode)] // MoneyDroppedExtended in ServerToClientPackets.txt
+        private Task HandleMoneyDroppedExtendedAsync(Memory<byte> packet)
+        {
+            try
+            {
+                var moneyDrop = new MoneyDroppedExtended(packet);
+                _clientState.AddOrUpdateMoneyInScope(moneyDrop.Id, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.Amount);
+                _logger.LogInformation("💰 Received MoneyDroppedExtended (2F): ID={Id:X4}, Amount={Amount}, Pos=({X},{Y}), Fresh={Fresh}",
+                    moneyDrop.Id, moneyDrop.Amount, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.IsFreshDrop);
+            }
+            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MoneyDroppedExtended (2F)."); }
+            return Task.CompletedTask;
+        }
+
+        [PacketHandler(0x14, NoSubCode)]
+        private Task HandleMapObjectOutOfScopeAsync(Memory<byte> packet)
+        {
+            try
+            {
+                var outOfScopePacket = new MapObjectOutOfScope(packet);
+                int count = outOfScopePacket.ObjectCount;
+                // _logger.LogInformation("🔭 Objects out of scope ({Count}):", count); // Moved log inside loop
+                if (count > 0)
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        ushort objectId = outOfScopePacket[i].Id;
+                        _clientState.RemoveObjectFromScope(objectId); // Call remove method
+                    }
+                }
+            }
+            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MapObjectOutOfScope (14). Packet: {PacketData}", Convert.ToHexString(packet.Span)); }
+            return Task.CompletedTask;
+        }
+
+
+        [PacketHandler(0x15, NoSubCode)] // ObjectMoved
         private Task HandleObjectMovedAsync(Memory<byte> packet)
         {
             try
@@ -1184,80 +1505,124 @@ namespace MuOnlineConsole
                 byte x = move.PositionX;
                 byte y = move.PositionY;
 
-                _logger.LogDebug("   -> Server reported position in 0x15: ({X}, {Y}) for ObjectId {Id:X4}", x, y, objectId);
+                _logger.LogDebug("   -> Received ObjectMoved (0x15): ID={Id:X4} -> ({X}, {Y})", objectId, x, y);
 
-                if (objectId == _clientState.GetCharacterId())
+                // Update position in scope if the object exists
+                if (_clientState.TryUpdateScopeObjectPosition(objectId, x, y))
                 {
-                    _logger.LogInformation("🏃‍♂️ Character teleported/moved to ({X}, {Y})", x, y);
-                    _clientState.SetPosition(x, y);
+                    _logger.LogTrace("   -> Updated position for {Id:X4} in scope.", objectId);
                 }
                 else
                 {
-                    _logger.LogDebug("   -> Other object ({Id:X4}) moved to ({X}, {Y})", objectId, x, y);
+                    // It's possible to receive a move for an object not yet in scope (race condition)
+                    // Or for an object we don't track (like maybe projectiles?)
+                    _logger.LogTrace("   -> Object {Id:X4} not found in scope for position update (or not tracked).", objectId);
+                }
+
+                // Player specific logic
+                if (objectId == _clientState.GetCharacterId())
+                {
+                    _logger.LogInformation("🏃‍♂️ Character teleported/moved to ({X}, {Y}) via 0x15", x, y);
+                    _clientState.SetPosition(x, y); // Update client's main position
+                    _clientState.SignalMovementHandled(); // Ensure walk lock is released if this was the confirmation
                 }
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ObjectMoved (15)."); _clientState.SignalMovementHandled(); }
+            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ObjectMoved (15)."); }
+            finally { _clientState.SignalMovementHandled(); } // Ensure walk lock is always released after a move confirmation/attempt
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0xD4, NoSubCode)]
+        [PacketHandler(0xD4, NoSubCode)] // ObjectWalked
         private Task HandleObjectWalkedAsync(Memory<byte> packet)
         {
+            // Keep existing parsing logic from previous step...
             _logger.LogDebug("🚶 Handling ObjectWalked (D4). Raw Packet Data: {PacketData}", Convert.ToHexString(packet.Span));
             const string forcedFormat = "Standard (Forced for D4)";
 
             try
             {
-                const int minStandardLength = 8;
-                if (packet.Length < minStandardLength)
+                const int minStandardLength = 8; // C1 Header (3) + SourceX/Y (2) + Step/Rot (1) + First Step Byte (1) if StepCount >= 1
+                if (packet.Length < 6) // Absolute minimum C1+SrcX/Y+Step/Rot
                 {
-                    _logger.LogWarning("Received walk packet (D4) too short for Standard format. Length: {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
+                    _logger.LogWarning("Received walk packet (D4) too short for base info. Length: {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
                     return Task.CompletedTask;
                 }
 
-                var walkStandard = new ObjectWalked(packet);
+                var walkStandard = new ObjectWalked(packet); // Assuming S6 structure works for parsing header info for older versions too
                 ushort objectId = walkStandard.ObjectId;
                 byte targetX = walkStandard.TargetX;
                 byte targetY = walkStandard.TargetY;
                 byte stepCount = walkStandard.StepCount;
-                ReadOnlySpan<byte> stepsDataSpan = walkStandard.StepData;
 
+
+                // --- Log direction ---
+                ReadOnlySpan<byte> stepsDataSpan = walkStandard.StepData;
                 byte firstStepDirection = 0xFF;
                 if (stepCount > 0 && stepsDataSpan.Length > 0)
                 {
                     byte firstStepByte = stepsDataSpan[0];
                     firstStepDirection = (byte)((firstStepByte >> 4) & 0x0F);
                 }
-
                 string firstStepDirStr = firstStepDirection <= 7 ? firstStepDirection.ToString() : "None";
+                // --- End Log direction ---
+
+                // Update position in scope if the object exists
+                if (_clientState.TryUpdateScopeObjectPosition(objectId, targetX, targetY))
+                {
+                    _logger.LogTrace("   -> Updated position for {Id:X4} in scope via walk packet.", objectId);
+                }
+                else
+                {
+                    _logger.LogTrace("   -> Object {Id:X4} not found in scope for walk update (or not tracked).", objectId);
+                }
+
 
                 if (objectId == _clientState.GetCharacterId())
                 {
                     if (stepCount > 0)
                     {
-                        _logger.LogInformation("🚶‍➡️ Character walking (Steps > 0) -> [Target Route according to server:({TargetX},{TargetY})] Steps:{Steps} ({Version}) First Step:{Dir}", targetX, targetY, stepCount, forcedFormat, firstStepDirStr);
-                        _clientState.SetPosition(targetX, targetY);
+                        _logger.LogInformation("🚶‍➡️ Character walking -> [Server Target:({TargetX},{TargetY})] Steps:{Steps} ({Version}) 1stStep:{Dir}", targetX, targetY, stepCount, forcedFormat, firstStepDirStr);
+                        _clientState.SetPosition(targetX, targetY); // Update client's main position
+                                                                    // Note: SignalMovementHandled should be called ONLY when the walk sequence is *confirmed* finished
+                                                                    // by the server, often via a final 0x15 packet or potentially a 0xD4 with StepCount=0.
+                                                                    // We call it below in finally, but ideally, it should wait for the *correct* confirmation.
                     }
                     else
                     {
-                        _logger.LogInformation("🚶‍➡️ Received D4 packet for character, but Steps=0. Position NOT updated. Target according to server: ({TargetX},{TargetY}). Waiting for possible 0x15.", targetX, targetY);
-                        _clientState.SignalMovementHandled();
+                        // A D4 with StepCount=0 might signify the end of a walk OR just a rotation update.
+                        // If it confirms the end position, update and signal.
+                        _logger.LogInformation("🚶‍➡️ Character walk ended/rotated at ({TargetX},{TargetY}) via 0xD4 (Steps=0)", targetX, targetY);
+                        _clientState.SetPosition(targetX, targetY);
+                        _clientState.SignalMovementHandled(); // Treat D4 Step=0 as end confirmation for now
                     }
                 }
                 else
                 {
-                    _logger.LogDebug("   -> Other object ({Id:X4}) walking -> [Target Route according to server:({TargetX},{TargetY})] Steps:{Steps} ({Version}) First Step:{Dir}", objectId, targetX, targetY, stepCount, forcedFormat, firstStepDirStr);
+                    _logger.LogDebug("   -> Other object ({Id:X4}) walking -> [Server Target:({TargetX},{TargetY})] Steps:{Steps} ({Version}) 1stStep:{Dir}", objectId, targetX, targetY, stepCount, forcedFormat, firstStepDirStr);
                 }
             }
             catch (ArgumentOutOfRangeException ex)
             {
                 _logger.LogError(ex, "💥 Range error while parsing ObjectWalked (D4) as {Format}. Likely unexpected packet length ({Length}). Packet: {PacketData}", forcedFormat, packet.Length, Convert.ToHexString(packet.Span));
-                _clientState.SignalMovementHandled();
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "💥 Error parsing ObjectWalked (D4) as {Format}. Packet: {PacketData}", forcedFormat, Convert.ToHexString(packet.Span));
-                _clientState.SignalMovementHandled();
+            }
+            finally
+            {
+                // Tentative: Release walk lock after processing ANY D4 for our character.
+                // This might be too early if the server sends multiple D4s for one walk request.
+                // A better approach involves tracking expected steps or waiting for 0x15.
+                if (packet.Length > 4) // Basic check
+                {
+                    ushort objectId = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(packet.Span.Slice(3, 2));
+                    if (objectId == _clientState.GetCharacterId())
+                    {
+                        // Still handle signalling inside the try block based on StepCount
+                        // _clientState.SignalMovementHandled(); // Moved signaling logic inside try block
+                    }
+                }
             }
             return Task.CompletedTask;
         }
@@ -1279,29 +1644,6 @@ namespace MuOnlineConsole
                 }
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ObjectAnimation (18)."); }
-            return Task.CompletedTask;
-        }
-
-        [PacketHandler(0x14, NoSubCode)]
-        private Task HandleMapObjectOutOfScopeAsync(Memory<byte> packet)
-        {
-            try
-            {
-                var outOfScopePacket = new MapObjectOutOfScope(packet);
-                int count = outOfScopePacket.ObjectCount;
-                _logger.LogInformation("🔭 Objects out of scope ({Count}):", count);
-                if (count > 0)
-                {
-                    var ids = new List<string>(count);
-                    for (int i = 0; i < count; i++)
-                    {
-                        ushort objectId = outOfScopePacket[i].Id;
-                        ids.Add($"{objectId:X4}");
-                    }
-                    _logger.LogInformation("   -> ID: {ObjectIds}", string.Join(", ", ids));
-                }
-            }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MapObjectOutOfScope (14). Packet: {PacketData}", Convert.ToHexString(packet.Span)); }
             return Task.CompletedTask;
         }
 

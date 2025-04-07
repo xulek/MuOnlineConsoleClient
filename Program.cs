@@ -8,7 +8,18 @@ namespace MuOnlineConsole
     {
         public static async Task Main(string[] args)
         {
-            Console.OutputEncoding = Encoding.UTF8;
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    Console.WriteLine("[Info] Attempting to set console codepage to UTF-8 (65001)...");
+                    System.Diagnostics.Process.Start("cmd.exe", "/c chcp 65001").WaitForExit();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Warning] Failed to set console codepage via chcp: {ex.Message}");
+            }
 
             var configuration = new ConfigurationBuilder()
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)

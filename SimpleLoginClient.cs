@@ -1,4 +1,5 @@
 using System.Buffers; // Required for ReadOnlySequence<byte>
+using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network.SimpleModulus;
@@ -83,6 +84,7 @@ namespace MuOnlineConsole
         private readonly string _username;
         private readonly string _password;
         private Dictionary<byte, byte> _serverDirectionMap = new();
+        private readonly ConcurrentDictionary<ushort, ScopeObject> _objectsInScope = new();
 
 
         public bool IsInGame => _isInGame;
@@ -394,6 +396,11 @@ namespace MuOnlineConsole
                             _currentState = ClientConnectionState.SelectingCharacter;
                             _ = _characterService.SelectCharacterAsync(selectedName);
                             _pendingCharacterSelection = null; // Clear pending list
+                            break;
+
+                        case "nearby":
+                        case "scope":
+                            ListObjectsInScope();
                             break;
 
                         case "move":
@@ -715,6 +722,153 @@ namespace MuOnlineConsole
             _leadership = leadership;
             _logger.LogInformation("📊 Stats: Str={Str}, Agi={Agi}, Vit={Vit}, Ene={Ene}, Cmd={Cmd}",
                 _strength, _agility, _vitality, _energy, _leadership);
+        }
+
+        public void AddOrUpdatePlayerInScope(ushort id, byte x, byte y, string name)
+        {
+            var player = new PlayerScopeObject(id, x, y, name);
+            _objectsInScope.AddOrUpdate(id, player, (_, existing) =>
+            {
+                // Update existing if needed (position, name potentially?)
+                existing.PositionX = x;
+                existing.PositionY = y;
+                ((PlayerScopeObject)existing).Name = name; // Cast needed if base class doesn't have Name
+                existing.LastUpdate = DateTime.UtcNow;
+                return existing;
+            });
+            _logger.LogTrace("Scope Add/Update: Player {Name} ({Id:X4}) at [{X},{Y}]", name, id, x, y);
+        }
+
+        public void AddOrUpdateNpcInScope(ushort id, byte x, byte y, ushort typeNumber, string? name = null)
+        {
+            var npc = new NpcScopeObject(id, x, y, typeNumber, name);
+            _objectsInScope.AddOrUpdate(id, npc, (_, existing) =>
+            {
+                existing.PositionX = x;
+                existing.PositionY = y;
+                ((NpcScopeObject)existing).TypeNumber = typeNumber;
+                ((NpcScopeObject)existing).Name = name;
+                existing.LastUpdate = DateTime.UtcNow;
+                return existing;
+            });
+            _logger.LogTrace("Scope Add/Update: NPC Type {Type} ({Id:X4}) at [{X},{Y}]", typeNumber, id, x, y);
+        }
+
+        public void AddOrUpdateItemInScope(ushort id, byte x, byte y, ReadOnlySpan<byte> itemData)
+        {
+            var item = new ItemScopeObject(id, x, y, itemData);
+            _objectsInScope.AddOrUpdate(id, item, (_, existing) =>
+           {
+               existing.PositionX = x;
+               existing.PositionY = y;
+               // Update item description if needed? Probably not unless data changes
+               existing.LastUpdate = DateTime.UtcNow;
+               return existing;
+           });
+            _logger.LogTrace("Scope Add/Update: Item ({Id:X4}) at [{X},{Y}]", id, x, y);
+        }
+
+        public void AddOrUpdateMoneyInScope(ushort id, byte x, byte y, uint amount)
+        {
+            var money = new MoneyScopeObject(id, x, y, amount);
+            _objectsInScope.AddOrUpdate(id, money, (_, existing) =>
+            {
+                existing.PositionX = x;
+                existing.PositionY = y;
+                ((MoneyScopeObject)existing).Amount = amount; // Money amount could potentially change? (Unlikely for dropped money)
+                existing.LastUpdate = DateTime.UtcNow;
+                return existing;
+            });
+            _logger.LogTrace("Scope Add/Update: Money ({Id:X4}) Amount {Amount} at [{X},{Y}]", id, amount, x, y);
+        }
+
+        public void RemoveObjectFromScope(ushort id)
+        {
+            if (_objectsInScope.TryRemove(id, out var removedObject))
+            {
+                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} ({Type})", id, removedObject.ObjectType);
+            }
+            else
+            {
+                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} not found.", id);
+            }
+        }
+
+        /// <summary>
+        /// Gets a snapshot of objects of a specific type currently in scope.
+        /// </summary>
+        /// <param name="type">The type of object to retrieve.</param>
+        /// <returns>An enumerable of scope objects matching the type.</returns>
+        public IEnumerable<ScopeObject> GetScopeItems(ScopeObjectType type)
+        {
+            // Return a snapshot to avoid issues with collection modification during iteration
+            return _objectsInScope.Values.Where(obj => obj.ObjectType == type).ToList();
+        }
+
+        public void ClearScope(bool clearSelf = false)
+        {
+            if (clearSelf)
+            {
+                _objectsInScope.Clear();
+                _logger.LogInformation("🔭 Scope Cleared (All).");
+            }
+            else
+            {
+                // Keep self, remove others
+                if (_characterId != 0xFFFF && _objectsInScope.TryGetValue(_characterId, out var self))
+                {
+                    _objectsInScope.Clear();
+                    _objectsInScope.TryAdd(_characterId, self);
+                    _logger.LogInformation("🔭 Scope Cleared (Others). Kept Self ({Id:X4})", _characterId);
+                }
+                else
+                {
+                    _objectsInScope.Clear();
+                    _logger.LogInformation("🔭 Scope Cleared (All - Self ID Unknown).");
+                }
+            }
+        }
+
+        public void ListObjectsInScope()
+        {
+            Console.WriteLine("--- Objects in Scope ---");
+            if (_objectsInScope.IsEmpty)
+            {
+                Console.WriteLine(" (Scope is empty)");
+                return;
+            }
+
+            foreach (var kvp in _objectsInScope.OrderBy(o => o.Key)) // Order by ID for consistency
+            {
+                Console.WriteLine($"  {kvp.Value}"); // Use the ToString() override
+            }
+            Console.WriteLine($"--- Total: {_objectsInScope.Count} ---");
+        }
+
+        public bool ScopeContains(ushort id)
+        {
+            return _objectsInScope.ContainsKey(id);
+        }
+
+        public bool TryUpdateScopeObjectPosition(ushort id, byte x, byte y)
+        {
+            if (_objectsInScope.TryGetValue(id, out ScopeObject? scopeObject))
+            {
+                scopeObject.PositionX = x;
+                scopeObject.PositionY = y;
+                scopeObject.LastUpdate = DateTime.UtcNow;
+                return true;
+            }
+            return false;
+        }
+
+        public void SignalMovementHandledIfWalking()
+        {
+            if (_isWalking)
+            {
+                _logger.LogWarning("🚶 Releasing walk lock due to error or unexpected state.");
+                _isWalking = false;
+            }
         }
 
         private void UpdateConsoleTitle()
