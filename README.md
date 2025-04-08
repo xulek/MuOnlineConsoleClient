@@ -8,33 +8,59 @@ A modern, modular C# client for connecting, logging in, and interacting with a M
 * Logs in using username and password.
 * Receives and displays the character list.
 * Selects a character and enters the game world.
-* Parses real-time packets (HP, Mana, SD, AG, Position, Stats, Skills, Server Messages, Objects in Scope, etc.).
+* Parses real-time packets (HP, Mana, SD, AG, Position, Stats, Skills, Server Messages, Objects in Scope, Inventory, Weather, Events, etc.).
 * **Basic In-Game Interaction:**
   * Sends step-by-step walk requests (`walk <direction...>`).
   * Sends walk-to-target requests (`walkto <X> <Y>`) — *uses simplified path generation, does not avoid obstacles*.
   * Sends instant move/teleport requests (`move <X> <Y>`).
-* Tracks basic character state (HP, Mana, SD, AG, Position, ID, Name).
-* Supports different MU Online protocol versions:
+* Tracks full character state:
+  * HP, Mana, SD, AG
+  * Current and Max stats
+  * Position, Name, ID
+  * Inventory (if supported by protocol)
+  * Skill list (add/remove updates)
+* Supports multiple MU Online protocol versions:
   * Season 6 (with support for Extended packets)
   * 0.97d
   * 0.75
-* Loads all settings (host, login, version, direction map) from a JSON configuration file.
+* Automatically switches from ConnectServer to GameServer after server selection.
+* Distinguishes packet handling between ConnectServer and GameServer using a unified routing layer.
+* Displays messages and chat in real time (including system/golden/guild messages).
+* Handles dynamic object scope (players, NPCs, items, zen) and their movement (walked/teleported).
+* Loads all settings (host, login, protocol, version, direction map) from a JSON configuration file.
 
 ## Project Structure
 
 ```plaintext
 MuOnlineConsole/
-├── CharacterService.cs         Handles character listing, selection, and movement
-├── ConnectionManager.cs        Manages low-level socket connection and encryption
-├── LoginService.cs             Handles the login process
-├── PacketBuilder.cs            Constructs outgoing network packets
-├── PacketRouter.cs             Routes and handles incoming packets
-├── Program.cs                  Main application entry point
-├── SimpleLoginClient.cs        Core client logic and command processing loop
-├── SubCodeHolder.cs            Utility class for handling sub-code packet identification
-├── MuOnlineSettings.cs         Configuration model used for appsettings.json
-├── appsettings.json            Client configuration (server, login, protocol, direction map)
-└── MuOnlineConsole.csproj      Project file
+├── Configuration/              ← Configuration models and JSON settings
+│   ├── MuOnlineSettings.cs
+│   └── appsettings.json
+│
+├── Core/                       ← Domain logic, core models and utilities
+│   ├── Models/
+│   │   ├── ScopeObject.cs
+│   │   └── ServerInfo.cs
+│   └── Utilities/
+│       ├── SubCodeHolder.cs
+│       └── PacketHandlerAttribute.cs
+│
+├── Networking/                 ← Network-related functionality
+│   ├── PacketHandling/
+│   │   ├── PacketRouter.cs
+│   │   └── PacketBuilder.cs
+│   └── Services/
+│       ├── ConnectionManager.cs
+│       ├── ConnectServerService.cs
+│       ├── LoginService.cs
+│       └── CharacterService.cs
+│
+├── Client/                     ← Main client logic, state handling, commands
+│   └── SimpleLoginClient.cs
+│
+├── Program.cs                  ← Application entry point
+├── MuOnlineConsole.csproj      ← Project file
+└── README.md
 ```
 
 ![Screenshot](https://i.ibb.co/vvcp7W5w/diagram-2.png)
@@ -51,7 +77,7 @@ MuOnlineConsole/
 1. Clone or download the repository.
 2. Open the project in Visual Studio / Rider or use the terminal.
 3. **Configure the client:** Open `appsettings.json` and set:
-   * `Host`, `Port`: Your server's address and port.
+   * `ConnectServerHost`, `ConnectServerPort`: Your server's address and port.
    * `Username`, `Password`: Your login credentials.
    * `ProtocolVersion`: One of `Season6`, `Version097`, `Version075`.
    * `ClientVersion`, `ClientSerial`: Version string and serial used during login.
@@ -76,28 +102,39 @@ MuOnlineConsole/
 
 ## Usage
 
-When launched, the client will attempt to connect, log in, and request the list of available characters. Once the character list is displayed, use the following command to select one:
+When launched, the client will:
 
-* `select <number>`: Selects a character from the list by number. Example: `select 1`
+* Connect to ConnectServer
+* Request and display server list
+* Switch to GameServer upon selection
+* Authenticate and fetch character list
+* Select character and enter the game
 
-After selecting a character and entering the game (`Character is now in-game...`), you can use the following commands:
+### Commands:
 
-* `exit`: Closes the client.
-* `move X Y`: Sends an instant move (teleport) request to coordinates X, Y.
-* `walk <dir1> [dir2] ...`: Sends a step-by-step walk request using the specified directions (0-7). E.g., `walk 6 6 5` (N, N, NE).
-* `walkto X Y`: Attempts to generate a simple path (up to 15 steps) towards the target coordinates X, Y and sends a walk request. *Note: Ignores obstacles.*
+* `exit` – Gracefully shuts down the client
+* `select <number>` – Selects a character from the list by index
+* `scope` – Lists visible in-game objects
+* `move X Y` – Sends instant move to coordinates
+* `walk <dir1> [dir2] ...` – Sends directional steps (0-7)
+* `walkto X Y` – Sends a walk sequence toward target position (approximate)
+* `servers` / `list` – Displays available servers (from ConnectServer)
+* `connect <id>` – Connects to a selected server from the list
 
 **Directions (Standard):**  
 0:W, 1:SW, 2:S, 3:SE, 4:E, 5:NE, 6:N, 7:NW
 
 ## Potential Improvements
 
-* **Refactor `PacketRouter`:** Use the Strategy pattern or a Dictionary mapping for better organization.
-* **Character State Class:** Encapsulate character state variables into a dedicated class.
-* **Full Pathfinding:** Implement an A* algorithm (requires map data) for the `walkto` command to navigate around obstacles.
-* **Track Other Objects:** Extend the client state to include information about other players, NPCs, and monsters in scope.
-* **More Advanced Actions:** Add support for using skills, NPC interactions, trading, etc.
+* Full A* pathfinding (obstacle-aware `walkto`)
+* Extended support for NPC interaction, trading, skill usage
+* GUI frontend (e.g., Avalonia, WinForms)
+* Packet recording and replay
+* Full character management (create/delete)
+* Auto-reconnect and ping monitoring
 
 ## License
 
-The source code of this client is provided under the MIT License (or another license if you choose). However, please note that this project utilizes the `MUnique.OpenMU.Network` library, which is subject to its own license. Check the license file of the `MUnique.OpenMU` project before using this client commercially or redistributing it.
+This project is released under the MIT License.
+
+Note: The client uses the `MUnique.OpenMU.Network` library which has its own licensing. Check the original repository for full license terms if reusing the networking components in another project.

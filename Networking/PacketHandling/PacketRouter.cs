@@ -1172,6 +1172,55 @@ namespace MuOnlineConsole
             return Task.CompletedTask;
         }
 
+        [PacketHandler(0x11, NoSubCode)]
+        private Task HandleObjectHitAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (TargetVersion >= TargetProtocolVersion.Season6)
+                {
+                    var hit = new ObjectHitExtended(packet);
+
+                    if (hit.ObjectId == _clientState.GetCharacterId())
+                    {
+                        var hpPercent = hit.HealthStatus * 100 / 250;
+                        var sdPercent = hit.ShieldStatus * 100 / 250;
+
+                        _logger.LogWarning("💔 You received {DmgHp} HP dmg, {DmgSd} SD dmg. HP={Hp}%, SD={Sd}%",
+                            hit.HealthDamage, hit.ShieldDamage, hpPercent, sdPercent);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("🎯 Target {Id:X4} received {DmgHp} HP dmg, {DmgSd} SD dmg.",
+                            hit.ObjectId, hit.HealthDamage, hit.ShieldDamage);
+                    }
+                }
+                else
+                {
+                    var hit = new ObjectHit(packet);
+
+                    if (hit.ObjectId == _clientState.GetCharacterId())
+                    {
+                        _logger.LogWarning("💔 You received {DmgHp} HP dmg, {DmgSd} SD dmg.",
+                            hit.HealthDamage, hit.ShieldDamage);
+
+                        _clientState.UpdateCurrentHealthShield(hit.HealthDamage, hit.ShieldDamage);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("🎯 Target {Id:X4} received {DmgHp} HP dmg, {DmgSd} SD dmg.",
+                            hit.ObjectId, hit.HealthDamage, hit.ShieldDamage);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing ObjectHit (0x11)");
+            }
+
+            return Task.CompletedTask;
+        }
+
         [PacketHandler(0x13, NoSubCode)]
         private Task HandleAddNpcToScopeAsync(Memory<byte> packet)
         {
