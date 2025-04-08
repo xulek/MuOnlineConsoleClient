@@ -1,5 +1,11 @@
 namespace MuOnlineConsole;
 
+public class PacketLoggingSettings
+{
+    public bool ShowWeather { get; set; } = true;
+    public bool ShowDamage { get; set; } = true;
+}
+
 public class MuOnlineSettings
 {
     // Connect Server Settings
@@ -19,4 +25,5 @@ public class MuOnlineSettings
     public string ClientVersion { get; set; } = "1.04d";
     public string ClientSerial { get; set; } = "0123456789ABCDEF";
     public Dictionary<byte, byte> DirectionMap { get; set; } = new();
+    public PacketLoggingSettings PacketLogging { get; set; } = new();
 }

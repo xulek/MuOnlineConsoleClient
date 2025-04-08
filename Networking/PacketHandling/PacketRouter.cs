@@ -1,4 +1,3 @@
-// ===== FILE: C:\Users\Michal\Documents\MuOnlineConsoleClient\PacketRouter.cs =====
 using System.Buffers;
 using System.Reflection;
 using System.Text;
@@ -7,7 +6,6 @@ using MUnique.OpenMU.Network;
 using MUnique.OpenMU.Network.Packets;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
 using MUnique.OpenMU.Network.Packets.ConnectServer;
-using static MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped; // Add Connect Server namespace
 
 namespace MuOnlineConsole
 {
@@ -22,16 +20,24 @@ namespace MuOnlineConsole
 
         private readonly Dictionary<(byte MainCode, byte SubCode), Func<Memory<byte>, Task>> _packetHandlers = new();
         private bool _isConnectServerRouting = false; // Flag to determine routing context
+        private readonly MuOnlineSettings _settings;
 
-        public PacketRouter(ILogger<PacketRouter> logger, CharacterService characterService, LoginService loginService, TargetProtocolVersion targetVersion, SimpleLoginClient clientState)
+        public PacketRouter(
+            ILogger<PacketRouter> logger,
+            CharacterService characterService,
+            LoginService loginService,
+            TargetProtocolVersion targetVersion,
+            SimpleLoginClient clientState,
+            MuOnlineSettings settings)
         {
             _logger = logger;
             _characterService = characterService;
             TargetVersion = targetVersion;
             _clientState = clientState;
+            _settings = settings;
 
             RegisterAttributeBasedHandlers();
-            RegisterConnectServerHandlers(); // Register CS handlers separately for clarity
+            RegisterConnectServerHandlers();
         }
 
         /// <summary>
@@ -145,6 +151,15 @@ namespace MuOnlineConsole
         private Task DispatchPacketInternalAsync(Memory<byte> packet, byte code, byte? subCode, byte headerType)
         {
             byte lookupSubCode = subCode ?? NoSubCode;
+
+            // 🌦️ Skip weather packets if disabled in config
+            if (code == 0x0F && _settings?.PacketLogging?.ShowWeather == false)
+                return Task.CompletedTask;
+
+            // 💔 Skip damage packets if disabled in config
+            if (code == 0x11 && _settings?.PacketLogging?.ShowDamage == false)
+                return Task.CompletedTask;
+
             var handlerKey = (code, lookupSubCode);
 
             if (_packetHandlers.TryGetValue(handlerKey, out var handler))
@@ -1067,9 +1082,14 @@ namespace MuOnlineConsole
                 var weather = new WeatherStatusUpdate(packet);
                 _logger.LogInformation("☀️ Received WeatherStatusUpdate: Weather={Weather}, Variation={Variation}", weather.Weather, weather.Variation);
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing WeatherStatusUpdate (0F)."); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing WeatherStatusUpdate (0F).");
+            }
+
             return Task.CompletedTask;
         }
+
 
         [PacketHandler(0x0B, NoSubCode)]
         private Task HandleMapEventStateAsync(Memory<byte> packet)

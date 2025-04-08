@@ -106,7 +106,7 @@ namespace MuOnlineConsole
             _loginService = new LoginService(_connectionManager, _logger, clientVersionBytes, clientSerialBytes, Xor3Keys);
             _characterService = new CharacterService(_connectionManager, _logger);
             _connectServerService = new ConnectServerService(_connectionManager, _loggerFactory.CreateLogger<ConnectServerService>());
-            _packetRouter = new PacketRouter(loggerFactory.CreateLogger<PacketRouter>(), _characterService, _loginService, targetVersion, this);
+            _packetRouter = new PacketRouter(loggerFactory.CreateLogger<PacketRouter>(), _characterService, _loginService, targetVersion, this, _settings);
             _serverDirectionMap = settings.DirectionMap;
             _username = settings.Username;
             _password = settings.Password;
