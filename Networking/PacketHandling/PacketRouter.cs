@@ -1197,17 +1197,18 @@ namespace MuOnlineConsole
         {
             try
             {
-                if (TargetVersion >= TargetProtocolVersion.Season6)
+                // Check length FIRST based on the target protocol version preference
+                if (TargetVersion >= TargetProtocolVersion.Season6 && packet.Length >= ObjectHitExtended.Length)
                 {
+                    // Attempt to parse as Extended version since it's Season 6+ and long enough
                     var hit = new ObjectHitExtended(packet);
 
                     if (hit.ObjectId == _clientState.GetCharacterId())
                     {
-                        var hpPercent = hit.HealthStatus * 100 / 250;
-                        var sdPercent = hit.ShieldStatus * 100 / 250;
-
-                        _logger.LogWarning("💔 You received {DmgHp} HP dmg, {DmgSd} SD dmg. HP={Hp}%, SD={Sd}%",
-                            hit.HealthDamage, hit.ShieldDamage, hpPercent, sdPercent);
+                        // Log the damage received and the status values (0-250 range)
+                        // Actual HP/SD update should come from 0x26 FF packet
+                        _logger.LogWarning("💔 You received {DmgHp} HP dmg, {DmgSd} SD dmg. Status: HP={HpStatus}/250, SD={SdStatus}/250",
+                            hit.HealthDamage, hit.ShieldDamage, hit.HealthStatus, hit.ShieldStatus);
                     }
                     else
                     {
@@ -1215,16 +1216,15 @@ namespace MuOnlineConsole
                             hit.ObjectId, hit.HealthDamage, hit.ShieldDamage);
                     }
                 }
-                else
+                else if (packet.Length >= ObjectHit.Length) // Check if long enough for the Standard version
                 {
+                    // Parse as Standard version (either because TargetVersion is older, or S6+ packet was too short)
                     var hit = new ObjectHit(packet);
 
                     if (hit.ObjectId == _clientState.GetCharacterId())
                     {
                         _logger.LogWarning("💔 You received {DmgHp} HP dmg, {DmgSd} SD dmg.",
                             hit.HealthDamage, hit.ShieldDamage);
-
-                        _clientState.UpdateCurrentHealthShield(hit.HealthDamage, hit.ShieldDamage);
                     }
                     else
                     {
@@ -1232,12 +1232,56 @@ namespace MuOnlineConsole
                             hit.ObjectId, hit.HealthDamage, hit.ShieldDamage);
                     }
                 }
+                else // Packet is too short for even the standard ObjectHit
+                {
+                    _logger.LogWarning("⚠️ Received ObjectHit packet (0x11) with unexpected length {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "💥 Error parsing ObjectHit (0x11)");
+                // Log the raw packet data in case of parsing errors
+                _logger.LogError(ex, "💥 Error parsing ObjectHit (0x11). Packet: {PacketData}", Convert.ToHexString(packet.Span));
             }
 
+            return Task.CompletedTask;
+        }
+
+        [PacketHandler(0x17, NoSubCode)] // Register the handler for packet 0xC1 17
+        private Task HandleObjectGotKilledAsync(Memory<byte> packet)
+        {
+            try
+            {
+                // Ensure the packet has the minimum expected length before parsing
+                if (packet.Length < ObjectGotKilled.Length)
+                {
+                    _logger.LogWarning("⚠️ Received ObjectGotKilled packet (0x17) with unexpected length {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
+                    return Task.CompletedTask;
+                }
+
+                var deathInfo = new ObjectGotKilled(packet);
+                ushort killedId = deathInfo.KilledId;
+                ushort killerId = deathInfo.KillerId; // ID of the object which performed the kill
+
+                if (killedId == _clientState.GetCharacterId())
+                {
+                    // Our character died
+                    _logger.LogWarning("💀 You died! Killed by object {KillerId:X4}.", killerId);
+                    // TODO Mark as not in game (or maybe a specific 'Dead' state)
+                    _clientState.UpdateCurrentHealthShield(0, 0); // Update UI immediately
+                    _clientState.SignalMovementHandled(); // Stop any ongoing walk
+                                                          // The server should send a respawn packet (e.g., F3 04) later
+                }
+                else
+                {
+                    // Another object died
+                    _logger.LogInformation("💀 Object {KilledId:X4} died. Killed by {KillerId:X4}.", killedId, killerId);
+                    _clientState.RemoveObjectFromScope(killedId); // Remove the object from the scope
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing ObjectGotKilled (0x17). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
             return Task.CompletedTask;
         }
 
