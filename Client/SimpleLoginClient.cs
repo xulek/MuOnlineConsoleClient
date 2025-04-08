@@ -782,15 +782,23 @@ namespace MuOnlineConsole
             _logger.LogTrace("Scope Add/Update: Money ({Id:X4}) Amount {Amount} at [{X},{Y}]", id, amount, x, y);
         }
 
-        public void RemoveObjectFromScope(ushort id)
+        /// <summary>
+        /// Removes an object from the scope dictionary.
+        /// </summary>
+        /// <param name="id">The masked ID of the object to remove.</param>
+        /// <returns>True if the object was found and removed; otherwise, false.</returns>
+        public bool RemoveObjectFromScope(ushort id)
         {
+            // Use TryRemove which returns true if the item was found and removed
             if (_objectsInScope.TryRemove(id, out var removedObject))
             {
-                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} ({Type})", id, removedObject.ObjectType);
+                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} ({Type}) - Success", id, removedObject.ObjectType);
+                return true; // Return true on successful removal
             }
             else
             {
-                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} not found.", id);
+                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} - Failed (Not Found)", id);
+                return false; // Return false if the object was not found
             }
         }
 

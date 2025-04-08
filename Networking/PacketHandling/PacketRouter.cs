@@ -897,6 +897,8 @@ namespace MuOnlineConsole
                 {
                     _clientState.SetPosition(posX, posY);
                 }
+
+                _clientState.SignalMovementHandled();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MapChanged (1C, 0F)."); }
             return Task.CompletedTask;
@@ -1103,18 +1105,19 @@ namespace MuOnlineConsole
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x12, NoSubCode)]
+        [PacketHandler(0x12, NoSubCode)] // AddCharacterToScope
         private Task HandleAddCharacterToScopeAsync(Memory<byte> packet)
         {
             try
             {
                 string characterNameToFind = _clientState.GetCharacterName();
-                ushort foundCharacterId = 0xFFFF;
+                ushort foundCharacterId = 0xFFFF; // Use the masked ID for comparison
 
                 switch (TargetVersion)
                 {
                     case TargetProtocolVersion.Season6:
                         ReadOnlySpan<byte> packetSpanS6 = packet.Span;
+                        // Minimum length check: Header (4 bytes for C2) + Count (1 byte)
                         if (packetSpanS6.Length < 5)
                         {
                             _logger.LogWarning("AddCharactersToScope (S6) packet too short (Length: {Length})", packetSpanS6.Length);
@@ -1122,73 +1125,102 @@ namespace MuOnlineConsole
                         }
                         byte countS6 = packetSpanS6[4];
                         _logger.LogInformation("👀 Received AddCharactersToScope (S6): {Count} characters.", countS6);
-                        int currentOffset = 5;
+                        int currentOffset = 5; // Start after header and count
 
                         for (int i = 0; i < countS6; i++)
                         {
+                            // Base size without effects for S6 structure
                             const int baseCharacterDataSizeS6 = 36;
                             if (currentOffset + baseCharacterDataSizeS6 > packetSpanS6.Length)
                             {
                                 _logger.LogWarning("Insufficient data for base character {Index} in AddCharactersToScope (S6). Offset: {Offset}, Length: {Length}", i, currentOffset, packetSpanS6.Length);
-                                break;
+                                break; // Stop processing if data is insufficient
                             }
                             ReadOnlySpan<byte> baseCharReadOnlySpan = packetSpanS6.Slice(currentOffset, baseCharacterDataSizeS6);
-                            ushort id = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(baseCharReadOnlySpan.Slice(0, 2));
+
+                            // Read the raw ID and apply the mask
+                            ushort rawId = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(baseCharReadOnlySpan.Slice(0, 2));
+                            ushort id = (ushort)(rawId & 0x7FFF); // Mask out the highest bit (0x8000)
+
                             byte x = baseCharReadOnlySpan[2];
                             byte y = baseCharReadOnlySpan[3];
+                            // Appearance data starts at index 4, size varies based on version.
+                            // Name starts after appearance data. For S6 base struct (36 bytes), appearance is 18 bytes (4 to 21), name starts at 22.
                             string name = packet.Span.Slice(currentOffset + 22, 10).ExtractString(0, 10, Encoding.UTF8);
                             byte effectCount = baseCharReadOnlySpan[baseCharacterDataSizeS6 - 1];
-                            int fullCharacterSize = baseCharacterDataSizeS6 + effectCount;
+                            int fullCharacterSize = baseCharacterDataSizeS6 + effectCount; // Calculate full size including effects
 
                             if (currentOffset + fullCharacterSize > packetSpanS6.Length)
                             {
                                 _logger.LogWarning("Insufficient data for full character {Index} (with {EffectCount} effects) in AddCharactersToScope (S6). Offset: {Offset}, Required: {Required}, Length: {Length}", i, effectCount, currentOffset, fullCharacterSize, packetSpanS6.Length);
-                                break;
+                                break; // Stop processing
                             }
 
+                            // Use the masked ID when adding/updating
                             _clientState.AddOrUpdatePlayerInScope(id, x, y, name);
 
-                            _logger.LogDebug("  -> Character in scope (S6): Index={Index}, ID={Id:X4}, Name='{Name}', Effects={EffectCount}, Size={Size}", i, id, name, effectCount, fullCharacterSize);
-                            if (name == characterNameToFind)
+                            // Log both raw and masked IDs for debugging
+                            _logger.LogDebug("  -> Character in scope (S6): Index={Index}, RawID={RawId:X4}, MaskedID={Id:X4}, Name='{Name}', Effects={EffectCount}, Size={Size}", i, rawId, id, name, effectCount, fullCharacterSize);
+
+                            // Use the masked ID for comparison
+                            if (name == characterNameToFind && _clientState.GetCharacterId() == 0xFFFF) // Only set if not already set
                             {
                                 foundCharacterId = id;
                             }
-                            currentOffset += fullCharacterSize;
+                            currentOffset += fullCharacterSize; // Move to the next character
                         }
-                        break;
+                        break; // End Season 6 case
+
                     case TargetProtocolVersion.Version097:
+                        // Assuming 095 structure is compatible for 0.97
                         var scope097 = new AddCharactersToScope095(packet);
                         _logger.LogInformation("👀 Received AddCharactersToScope (0.97): {Count} characters.", scope097.CharacterCount);
                         for (int i = 0; i < scope097.CharacterCount; i++)
                         {
                             var c = scope097[i];
-                            _clientState.AddOrUpdatePlayerInScope(c.Id, c.CurrentPositionX, c.CurrentPositionY, c.Name);
-                            _logger.LogDebug("  -> Character in scope (0.97): ID={Id:X4}, Name='{Name}'", c.Id, c.Name);
-                            if (c.Name == characterNameToFind) foundCharacterId = c.Id;
+                            ushort rawId097 = c.Id;
+                            ushort maskedId097 = (ushort)(rawId097 & 0x7FFF); // Apply mask
+                            _clientState.AddOrUpdatePlayerInScope(maskedId097, c.CurrentPositionX, c.CurrentPositionY, c.Name); // Use masked ID
+                            _logger.LogDebug("  -> Character in scope (0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Name='{Name}'", rawId097, maskedId097, c.Name);
+                            if (c.Name == characterNameToFind && _clientState.GetCharacterId() == 0xFFFF) // Only set if not already set
+                            {
+                                foundCharacterId = maskedId097; // Use masked ID
+                            }
                         }
-                        break;
+                        break; // End 0.97 case
+
                     case TargetProtocolVersion.Version075:
                         var scope075 = new AddCharactersToScope075(packet);
                         _logger.LogInformation("👀 Received AddCharactersToScope (0.75): {Count} characters.", scope075.CharacterCount);
                         for (int i = 0; i < scope075.CharacterCount; i++)
                         {
                             var c = scope075[i];
-                            _clientState.AddOrUpdatePlayerInScope(c.Id, c.CurrentPositionX, c.CurrentPositionY, c.Name);
-                            _logger.LogDebug("  -> Character in scope (0.75): ID={Id:X4}, Name='{Name}'", c.Id, c.Name);
-                            if (c.Name == characterNameToFind) foundCharacterId = c.Id;
+                            ushort rawId075 = c.Id;
+                            ushort maskedId075 = (ushort)(rawId075 & 0x7FFF); // Apply mask
+                            _clientState.AddOrUpdatePlayerInScope(maskedId075, c.CurrentPositionX, c.CurrentPositionY, c.Name); // Use masked ID
+                            _logger.LogDebug("  -> Character in scope (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Name='{Name}'", rawId075, maskedId075, c.Name);
+                            if (c.Name == characterNameToFind && _clientState.GetCharacterId() == 0xFFFF) // Only set if not already set
+                            {
+                                foundCharacterId = maskedId075; // Use masked ID
+                            }
                         }
-                        break;
+                        break; // End 0.75 case
+
                     default:
                         _logger.LogWarning("❓ Unsupported protocol version ({Version}) for AddCharacterToScope.", TargetVersion);
                         break;
                 }
 
+                // Set the character ID if it was found and not set previously
                 if (foundCharacterId != 0xFFFF && _clientState.GetCharacterId() == 0xFFFF)
                 {
                     _clientState.SetCharacterId(foundCharacterId);
                 }
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing AddCharactersToScope (12). Packet: {PacketData}", Convert.ToHexString(packet.Span)); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing AddCharactersToScope (12). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
             return Task.CompletedTask;
         }
 
@@ -1285,7 +1317,7 @@ namespace MuOnlineConsole
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x13, NoSubCode)]
+        [PacketHandler(0x13, NoSubCode)] // AddNpcToScope
         private Task HandleAddNpcToScopeAsync(Memory<byte> packet)
         {
             try
@@ -1298,40 +1330,53 @@ namespace MuOnlineConsole
                         for (int i = 0; i < scopeS6.NpcCount; i++)
                         {
                             var npc = scopeS6[i];
-                            _clientState.AddOrUpdateNpcInScope(npc.Id, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // <--- Added call
-                            _logger.LogDebug("  -> NPC in scope (S6): ID={Id:X4}, Type={Type}, Pos=({X},{Y})", npc.Id, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
+                            ushort rawIdS6 = npc.Id;
+                            ushort maskedIdS6 = (ushort)(rawIdS6 & 0x7FFF); // Apply mask
+                            _clientState.AddOrUpdateNpcInScope(maskedIdS6, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
+                            _logger.LogDebug("  -> NPC in scope (S6): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Type={Type}, Pos=({X},{Y})", rawIdS6, maskedIdS6, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
                         }
-                        break;
+                        break; // End Season 6 case
+
                     case TargetProtocolVersion.Version097:
+                        // Assuming 095 structure is compatible for 0.97
                         var scope097 = new AddNpcsToScope095(packet);
                         _logger.LogInformation("🤖 Received AddNpcToScope (0.97): {Count} NPC.", scope097.NpcCount);
                         for (int i = 0; i < scope097.NpcCount; i++)
                         {
                             var npc = scope097[i];
-                            _clientState.AddOrUpdateNpcInScope(npc.Id, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // <--- Added call
-                            _logger.LogDebug("  -> NPC in scope (0.97): ID={Id:X4}, Type={Type}, Pos=({X},{Y})", npc.Id, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
+                            ushort rawId097 = npc.Id;
+                            ushort maskedId097 = (ushort)(rawId097 & 0x7FFF); // Apply mask
+                            _clientState.AddOrUpdateNpcInScope(maskedId097, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
+                            _logger.LogDebug("  -> NPC in scope (0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Type={Type}, Pos=({X},{Y})", rawId097, maskedId097, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
                         }
-                        break;
+                        break; // End 0.97 case
+
                     case TargetProtocolVersion.Version075:
                         var scope075 = new AddNpcsToScope075(packet);
                         _logger.LogInformation("🤖 Received AddNpcToScope (0.75): {Count} NPC.", scope075.NpcCount);
                         for (int i = 0; i < scope075.NpcCount; i++)
                         {
                             var npc = scope075[i];
-                            _clientState.AddOrUpdateNpcInScope(npc.Id, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // <--- Added call
-                            _logger.LogDebug("  -> NPC in scope (0.75): ID={Id:X4}, Type={Type}, Pos=({X},{Y})", npc.Id, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
+                            ushort rawId075 = npc.Id;
+                            ushort maskedId075 = (ushort)(rawId075 & 0x7FFF); // Apply mask
+                            _clientState.AddOrUpdateNpcInScope(maskedId075, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
+                            _logger.LogDebug("  -> NPC in scope (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Type={Type}, Pos=({X},{Y})", rawId075, maskedId075, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
                         }
-                        break;
+                        break; // End 0.75 case
+
                     default:
                         _logger.LogWarning("❓ Unsupported protocol version ({Version}) for AddNpcToScope.", TargetVersion);
                         break;
                 }
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing AddNpcToScope (13)."); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing AddNpcToScope (13). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x20, NoSubCode)]
+        [PacketHandler(0x20, NoSubCode)] // ItemsDropped
         private Task HandleItemsDroppedAsync(Memory<byte> packet)
         {
             try
@@ -1344,7 +1389,7 @@ namespace MuOnlineConsole
                 {
                     if (packet.Length < ItemsDroppedFixedPrefixSize)
                     {
-                        _logger.LogWarning("⚠️ ItemsDropped packet (0x20) too short. Length: {Length}", packet.Length);
+                        _logger.LogWarning("⚠️ ItemsDropped packet (0x20, S6+) too short for header. Length: {Length}", packet.Length);
                         return Task.CompletedTask;
                     }
 
@@ -1355,8 +1400,6 @@ namespace MuOnlineConsole
                     for (int i = 0; i < droppedItems.ItemCount; i++)
                     {
                         // --- Calculate structLength dynamically ---
-                        // We need to know the item data length for THIS item.
-                        // This is complex without parsing the item data itself to know its real size.
                         // For robust parsing, one would typically read the base DroppedItem,
                         // then parse the ItemData within it to determine its actual size,
                         // then advance the offset.
@@ -1368,7 +1411,8 @@ namespace MuOnlineConsole
                         int currentStructSize;
                         if (droppedItems.ItemCount == 1)
                         {
-                            itemDataLenGuess = packet.Length - currentOffset - MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(0);
+                            // Calculate potential data length based on remaining packet size
+                            itemDataLenGuess = packet.Length - currentOffset - MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(0); // Size of struct header
                             if (itemDataLenGuess < 0)
                             {
                                 _logger.LogWarning("  -> Invalid calculated item data length ({Length}) for single item. Skipping.", itemDataLenGuess);
@@ -1382,9 +1426,6 @@ namespace MuOnlineConsole
                             // We have to make an assumption or skip. Let's assume a default small size or log and skip.
                             // TODO: Implement proper item size detection based on item type/data.
                             _logger.LogWarning("  -> Cannot reliably parse multiple items of potentially variable size in ItemsDropped (0x20). Skipping details for item {Index}.", i);
-                            // Or, if you know the MINIMUM item data size (e.g., 7 bytes for older versions?), use that:
-                            // itemDataLenGuess = 7; // Example assumption
-                            // currentStructSize = ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(itemDataLenGuess);
                             break; // Exit loop for now if multiple items and unknown size
                         }
 
@@ -1398,9 +1439,15 @@ namespace MuOnlineConsole
                         var itemMemory = packet.Slice(currentOffset, currentStructSize);
                         var item = new MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem(itemMemory); // Use the sub-struct
 
-                        // Process the item
-                        _clientState.AddOrUpdateItemInScope(item.Id, item.PositionX, item.PositionY, item.ItemData);
-                        _logger.LogDebug("  -> Dropped Item (S6/0.97): ID={Id:X4}, Pos=({X},{Y}), Fresh={Fresh}, DataLen={DataLen}", item.Id, item.PositionX, item.PositionY, item.IsFreshDrop, item.ItemData.Length);
+                        // --- Apply ID Masking ---
+                        ushort rawId = item.Id;
+                        ushort maskedId = (ushort)(rawId & 0x7FFF); // Mask out the highest bit
+                                                                    // ------------------------
+
+                        // Process the item using the masked ID
+                        _clientState.AddOrUpdateItemInScope(maskedId, item.PositionX, item.PositionY, item.ItemData); // Use maskedId
+                        _logger.LogDebug("  -> Dropped Item (S6/0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Fresh={Fresh}, DataLen={DataLen}",
+                                         rawId, maskedId, item.PositionX, item.PositionY, item.IsFreshDrop, item.ItemData.Length);
 
                         // Advance the offset
                         currentOffset += currentStructSize;
@@ -1421,31 +1468,30 @@ namespace MuOnlineConsole
                     // 0.75 usually sends one item/money drop per packet for 0x20
                     if (droppedObjectLegacy.ItemCount == 1)
                     {
-                        ushort id = droppedObjectLegacy.Id;
+                        // --- Apply ID Masking ---
+                        ushort rawId = droppedObjectLegacy.Id;
+                        ushort maskedId = (ushort)(rawId & 0x7FFF); // Mask out the highest bit
+                                                                    // ------------------------
                         byte x = droppedObjectLegacy.PositionX;
                         byte y = droppedObjectLegacy.PositionY;
 
                         // Check if it's money based on known item group/index for money
-                        // The MoneyDropped075 structure itself has MoneyGroup/MoneyNumber properties
                         if (droppedObjectLegacy.MoneyGroup == 14 && droppedObjectLegacy.MoneyNumber == 15)
                         {
-                            uint amount = droppedObjectLegacy.Amount; // Use the extension method from MoneyDropped.txt
-                            _clientState.AddOrUpdateMoneyInScope(id, x, y, amount);
-                            _logger.LogDebug("  -> Dropped Money (0.75): ID={Id:X4}, Pos=({X},{Y}), Amount={Amount}", id, x, y, amount);
+                            uint amount = droppedObjectLegacy.Amount; // Use the extension method
+                            _clientState.AddOrUpdateMoneyInScope(maskedId, x, y, amount); // Use maskedId
+                            _logger.LogDebug("  -> Dropped Money (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Amount={Amount}", rawId, maskedId, x, y, amount);
                         }
-                        else
+                        else // It's an item
                         {
-                            // It's an item. The item data is embedded within the MoneyDropped075 structure's layout.
-                            // We need to extract the relevant part. The MoneyDropped075 structure has specific offsets.
-                            // The item data for 0.75 item structure (usually 7 bytes) starts conceptually after the coordinates (index 8).
-                            // Let's assume the item data occupies bytes 9 through 15 (total 7 bytes) within the MoneyDropped075 structure.
-                            const int itemDataOffset = 9; // Offset within the MoneyDropped075 structure
-                            const int itemDataLength075 = 7; // Standard 0.75 item data length
+                            // Extract item data (assuming 7 bytes starting after coordinates)
+                            const int itemDataOffset = 9;
+                            const int itemDataLength075 = 7;
                             if (MoneyDropped075.Length >= itemDataOffset + itemDataLength075)
                             {
                                 ReadOnlySpan<byte> itemData = packet.Span.Slice(itemDataOffset, itemDataLength075);
-                                _clientState.AddOrUpdateItemInScope(id, x, y, itemData);
-                                _logger.LogDebug("  -> Dropped Item (0.75): ID={Id:X4}, Pos=({X},{Y}), Data={Data}", id, x, y, Convert.ToHexString(itemData));
+                                _clientState.AddOrUpdateItemInScope(maskedId, x, y, itemData); // Use maskedId
+                                _logger.LogDebug("  -> Dropped Item (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Data={Data}", rawId, maskedId, x, y, Convert.ToHexString(itemData));
                             }
                             else
                             {
@@ -1465,22 +1511,24 @@ namespace MuOnlineConsole
             }
             catch (ArgumentOutOfRangeException ex)
             {
-                // Catch index errors which are common with incorrect length calculations
                 _logger.LogError(ex, "💥 Index/Range error parsing ItemsDropped (20). Packet Length: {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 General error parsing ItemsDropped (20). Packet: {PacketData}", Convert.ToHexString(packet.Span)); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 General error parsing ItemsDropped (20). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x21, NoSubCode)] // C2 21 00 - ItemDropRemoved
+        [PacketHandler(0x21, NoSubCode)] // ItemDropRemoved
         private Task HandleItemDropRemovedAsync(Memory<byte> packet)
         {
             try
             {
-                if (TargetVersion < TargetProtocolVersion.Version097) // Assume 0.97+ uses S6 structure
+                // Log warning for older versions, assuming S6 structure otherwise
+                if (TargetVersion < TargetProtocolVersion.Version097)
                 {
                     _logger.LogWarning("⚠️ ItemDropRemoved (0x21) handling may differ for version {Version}. Assuming S6+ structure.", TargetVersion);
-                    // Potentially add specific handling for older versions if their 0x21 structure is different
                 }
 
                 const int ItemDropRemovedFixedHeaderSize = 4; // C2 Header size
@@ -1489,7 +1537,7 @@ namespace MuOnlineConsole
 
                 if (packet.Length < ItemDropRemovedFixedPrefixSize)
                 {
-                    _logger.LogWarning("⚠️ ItemDropRemoved packet (0x21) too short. Length: {Length}", packet.Length);
+                    _logger.LogWarning("⚠️ ItemDropRemoved packet (0x21) too short for header. Length: {Length}", packet.Length);
                     return Task.CompletedTask;
                 }
 
@@ -1497,9 +1545,11 @@ namespace MuOnlineConsole
                 byte count = itemDropRemoved.ItemCount;
                 _logger.LogInformation("🗑️ Received ItemDropRemoved: {Count} item(s).", count);
 
+                // Basic length check for the declared number of items
                 if (packet.Length < ItemDropRemovedFixedPrefixSize + count * ItemIdSize)
                 {
                     _logger.LogWarning("⚠️ ItemDropRemoved packet (0x21) seems too short for {Count} items. Length: {Length}", count, packet.Length);
+                    // Adjust count based on actual length if inconsistent, although this indicates a server issue
                     count = (byte)((packet.Length - ItemDropRemovedFixedPrefixSize) / ItemIdSize);
                     _logger.LogWarning("   -> Adjusting count to {AdjustedCount} based on length.", count);
                 }
@@ -1509,59 +1559,33 @@ namespace MuOnlineConsole
                     try
                     {
                         var droppedItemIdStruct = itemDropRemoved[i]; // Access struct within the packet
-                        ushort idToRemoveFromServer = droppedItemIdStruct.Id; // Get the ID sent by the server
+                        ushort idFromServerRaw = droppedItemIdStruct.Id; // Get the RAW ID sent by the server
 
-                        // --- SERVER BUG WORKAROUND START ---
-                        // Some servers incorrectly send a generic ID (like 1 or 2) in the 0x21 packet
-                        // instead of the actual item ID (like 8001, 8002).
-                        // This workaround attempts to guess the correct item ID *only* if:
-                        // 1. The server sent a suspicious low ID (e.g., <= 10).
-                        // 2. This packet contains only one removal instruction (count == 1).
-                        // 3. There is exactly one Item or Money object currently in the client's scope.
-                        // THIS IS UNRELIABLE and should be fixed on the server!
-                        ushort actualIdToRemove = idToRemoveFromServer; // Start with the ID from the server
-                        bool usedWorkaround = false;
+                        // --- Apply ID Masking ---
+                        // Always mask the ID received from the server before using it for lookup/removal
+                        ushort idFromServerMasked = (ushort)(idFromServerRaw & 0x7FFF);
+                        // ------------------------
 
-                        if (idToRemoveFromServer <= 10 && count == 1) // Condition 1 & 2
+                        // Attempt removal using the masked ID directly
+                        bool removed = _clientState.RemoveObjectFromScope(idFromServerMasked);
+
+                        if (removed)
                         {
-                            var itemsInScope = _clientState.GetScopeItems(ScopeObjectType.Item).ToList();
-                            var moneyInScope = _clientState.GetScopeItems(ScopeObjectType.Money).ToList();
-
-                            if (itemsInScope.Count + moneyInScope.Count == 1) // Condition 3
-                            {
-                                ScopeObject? singleObject = itemsInScope.FirstOrDefault() ?? moneyInScope.FirstOrDefault();
-                                if (singleObject != null)
-                                {
-                                    actualIdToRemove = singleObject.Id; // Assume this single object is the one to remove
-                                    usedWorkaround = true;
-                                    _logger.LogWarning("🔧 Applying workaround for ItemDropRemoved: Server sent ID {ServerId:X4}, but only one item/money ({ActualId:X4}) is in scope. Attempting removal of {ActualId:X4}.",
-                                        idToRemoveFromServer, actualIdToRemove, actualIdToRemove);
-                                }
-                            }
-                            else if (itemsInScope.Count + moneyInScope.Count > 1)
-                            {
-                                _logger.LogWarning("🔧 Workaround for ItemDropRemoved skipped: Server sent suspicious ID {ServerId:X4}, but multiple ({Count}) items/money exist in scope. Cannot determine correct target.",
-                                     idToRemoveFromServer, itemsInScope.Count + moneyInScope.Count);
-                            }
-                        }
-                        // --- SERVER BUG WORKAROUND END ---
-
-
-                        // Attempt removal using the potentially corrected ID
-                        _clientState.RemoveObjectFromScope(actualIdToRemove); // Use actualIdToRemove
-
-                        if (usedWorkaround)
-                        {
-                            _logger.LogDebug("  -> Removal attempted using WORKAROUND ID {Id:X4}.", actualIdToRemove);
+                            _logger.LogDebug("  -> Removed Item: Server RawID {RawId:X4}, Used MaskedID {MaskedId:X4}.", idFromServerRaw, idFromServerMasked);
                         }
                         else
                         {
-                            _logger.LogDebug("  -> Removing Item ID {Id:X4} (received from server).", actualIdToRemove);
+                            // Log if removal failed (item might have already been removed or never existed with that masked ID)
+                            _logger.LogWarning("  -> Failed to remove Item: Server RawID {RawId:X4}, MaskedID {MaskedId:X4}. Item not found in scope.", idFromServerRaw, idFromServerMasked);
                         }
+                    }
+                    catch (IndexOutOfRangeException ex) // Catch potential errors if struct access goes wrong
+                    {
+                        _logger.LogError(ex, "💥 Index error processing item removal at index {Index} in ItemDropRemoved (21).", i);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "💥 Error processing item removal at index {Index} in ItemDropRemoved (21).", i);
+                        _logger.LogError(ex, "💥 General error processing item removal at index {Index} in ItemDropRemoved (21).", i);
                     }
                 }
             }
@@ -1572,17 +1596,33 @@ namespace MuOnlineConsole
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x2F, NoSubCode)] // MoneyDroppedExtended in ServerToClientPackets.txt
+        [PacketHandler(0x2F, NoSubCode)] // MoneyDroppedExtended
         private Task HandleMoneyDroppedExtendedAsync(Memory<byte> packet)
         {
             try
             {
+                // Ensure packet is long enough before parsing
+                if (packet.Length < MoneyDroppedExtended.Length)
+                {
+                    _logger.LogWarning("⚠️ MoneyDroppedExtended packet (0x2F) too short. Length: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
                 var moneyDrop = new MoneyDroppedExtended(packet);
-                _clientState.AddOrUpdateMoneyInScope(moneyDrop.Id, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.Amount);
-                _logger.LogInformation("💰 Received MoneyDroppedExtended (2F): ID={Id:X4}, Amount={Amount}, Pos=({X},{Y}), Fresh={Fresh}",
-                    moneyDrop.Id, moneyDrop.Amount, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.IsFreshDrop);
+
+                // --- Apply ID Masking ---
+                ushort rawId = moneyDrop.Id;
+                ushort maskedId = (ushort)(rawId & 0x7FFF); // Mask out the highest bit
+                                                            // ------------------------
+
+                _clientState.AddOrUpdateMoneyInScope(maskedId, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.Amount); // Use maskedId
+                _logger.LogInformation("💰 Received MoneyDroppedExtended (2F): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Amount={Amount}, Pos=({X},{Y}), Fresh={Fresh}",
+                    rawId, maskedId, moneyDrop.Amount, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.IsFreshDrop);
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MoneyDroppedExtended (2F)."); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing MoneyDroppedExtended (2F). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
             return Task.CompletedTask;
         }
 
