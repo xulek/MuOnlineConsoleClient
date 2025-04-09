@@ -1381,11 +1381,10 @@ namespace MuOnlineConsole
         {
             try
             {
-                // Define the size of the fixed part BEFORE the item list starts
                 const int ItemsDroppedFixedHeaderSize = 4; // C2 Header size
                 const int ItemsDroppedFixedPrefixSize = ItemsDroppedFixedHeaderSize + 1; // Header + ItemCount byte
 
-                if (TargetVersion >= TargetProtocolVersion.Season6) // Assuming 0.97+ uses similar structure to S6 for 0x20
+                if (TargetVersion >= TargetProtocolVersion.Season6)
                 {
                     if (packet.Length < ItemsDroppedFixedPrefixSize)
                     {
@@ -1393,70 +1392,90 @@ namespace MuOnlineConsole
                         return Task.CompletedTask;
                     }
 
-                    var droppedItems = new ItemsDropped(packet); // Use the S6 struct
+                    var droppedItems = new ItemsDropped(packet);
                     _logger.LogInformation("💰 Received ItemsDropped (S6/0.97): {Count} item(s).", droppedItems.ItemCount);
 
-                    int currentOffset = ItemsDroppedFixedPrefixSize; // Start reading items after Header + ItemCount
+                    int currentOffset = ItemsDroppedFixedPrefixSize;
                     for (int i = 0; i < droppedItems.ItemCount; i++)
                     {
-                        // --- Calculate structLength dynamically ---
-                        // For robust parsing, one would typically read the base DroppedItem,
-                        // then parse the ItemData within it to determine its actual size,
-                        // then advance the offset.
+                        // --- Dynamic Length Calculation ---
+                        // We need to determine the length of the ItemData first.
+                        // This requires parsing the item data itself, which is complex.
+                        // For now, we'll assume a fixed size or use a simpler method if possible.
+                        // Let's try to get the item data span first, assuming the base struct size.
+                        const int baseDroppedItemSize = 4; // Id (2), PosX (1), PosY (1)
+                        if (currentOffset + baseDroppedItemSize > packet.Length)
+                        {
+                             _logger.LogWarning("  -> Packet too short for base DroppedItem {Index}. Offset: {Offset}, TotalLength: {Total}", i, currentOffset, packet.Length);
+                             break;
+                        }
 
-                        // --- Simplified Approach (Less Robust) ---
-                        // Attempt to guess length IF only one item exists in the packet.
-                        // This WILL FAIL if multiple items with different data lengths are sent.
-                        int itemDataLenGuess = -1;
-                        int currentStructSize;
+                        // Determine ItemData length (this is the tricky part without full item parsing)
+                        // A common (but not always correct) assumption is that ItemData length is fixed per version, e.g., 12 for S6.
+                        // A better approach: If the packet contains only ONE item, calculate length based on remaining bytes.
+                        int itemDataLength = -1;
+                        int currentStructSize = 0;
+
                         if (droppedItems.ItemCount == 1)
                         {
-                            // Calculate potential data length based on remaining packet size
-                            itemDataLenGuess = packet.Length - currentOffset - MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(0); // Size of struct header
-                            if (itemDataLenGuess < 0)
-                            {
-                                _logger.LogWarning("  -> Invalid calculated item data length ({Length}) for single item. Skipping.", itemDataLenGuess);
+                            itemDataLength = packet.Length - currentOffset - baseDroppedItemSize;
+                            if (itemDataLength < 0) {
+                                _logger.LogWarning("  -> Invalid calculated item data length ({Length}) for single item. Skipping.", itemDataLength);
                                 break;
                             }
-                            currentStructSize = MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(itemDataLenGuess);
+                            currentStructSize = MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(itemDataLength);
                         }
                         else
                         {
-                            // We cannot reliably determine the size for multiple items without full parsing.
-                            // We have to make an assumption or skip. Let's assume a default small size or log and skip.
-                            // TODO: Implement proper item size detection based on item type/data.
-                            _logger.LogWarning("  -> Cannot reliably parse multiple items of potentially variable size in ItemsDropped (0x20). Skipping details for item {Index}.", i);
-                            break; // Exit loop for now if multiple items and unknown size
+                            // For multiple items, we MUST know the exact size. Let's assume 12 for S6 for now, but this is fragile.
+                            // In a real scenario, you'd need a proper ItemSerializer here.
+                            itemDataLength = 12; // ASSUMPTION FOR S6+
+                            currentStructSize = MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem.GetRequiredSize(itemDataLength);
+                             _logger.LogWarning("  -> Assuming ItemData length {Length} for multi-item packet 0x20.", itemDataLength);
                         }
 
                         if (currentOffset + currentStructSize > packet.Length)
                         {
-                            _logger.LogWarning("  -> Packet too short for DroppedItem {Index}. Offset: {Offset}, Required: {Required}, TotalLength: {Total}", i, currentOffset, currentStructSize, packet.Length);
+                            _logger.LogWarning("  -> Packet too short for calculated DroppedItem {Index}. Offset: {Offset}, Required: {Required}, TotalLength: {Total}", i, currentOffset, currentStructSize, packet.Length);
                             break;
                         }
 
-                        // Slice the memory for the current item struct
                         var itemMemory = packet.Slice(currentOffset, currentStructSize);
-                        var item = new MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem(itemMemory); // Use the sub-struct
+                        var item = new MUnique.OpenMU.Network.Packets.ServerToClient.ItemsDropped.DroppedItem(itemMemory);
 
-                        // --- Apply ID Masking ---
                         ushort rawId = item.Id;
-                        ushort maskedId = (ushort)(rawId & 0x7FFF); // Mask out the highest bit
-                                                                    // ------------------------
+                        ushort maskedId = (ushort)(rawId & 0x7FFF);
+                        ReadOnlySpan<byte> itemData = item.ItemData; // Get the item data span
 
-                        // Process the item using the masked ID
-                        _clientState.AddOrUpdateItemInScope(maskedId, item.PositionX, item.PositionY, item.ItemData); // Use maskedId
-                        _logger.LogDebug("  -> Dropped Item (S6/0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Fresh={Fresh}, DataLen={DataLen}",
-                                         rawId, maskedId, item.PositionX, item.PositionY, item.IsFreshDrop, item.ItemData.Length);
+                        // --- Get Item Name ---
+                        string itemName = "Unknown Item";
+                        if (itemData.Length >= 6) // Check if we have enough data for Group lookup
+                        {
+                            short itemId = itemData[0];
+                            byte groupByte = itemData[5];
+                            byte itemGroup = (byte)(groupByte >> 4);
+                            itemName = ItemDatabase.GetItemName(itemGroup, itemId) ?? $"Unknown (G:{itemGroup},I:{itemId})";
+                        }
+                        else if (itemData.Length > 0) // Try getting name just by ID if group byte is missing (less reliable)
+                        {
+                             short itemId = itemData[0];
+                             // We can't reliably get the group here, so the lookup will likely fail or be ambiguous.
+                             // We could iterate all groups, but that's inefficient and error-prone.
+                             itemName = $"Unknown (ID:{itemId}, Group?)";
+                             _logger.LogWarning("  -> Dropped Item {Index} has insufficient data length ({DataLen}) to determine group.", i, itemData.Length);
+                        }
+                        // ---------------------
 
-                        // Advance the offset
+                        _clientState.AddOrUpdateItemInScope(maskedId, item.PositionX, item.PositionY, itemData);
+                        _logger.LogDebug("  -> Dropped Item (S6/0.97): Name='{ItemName}', RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Fresh={Fresh}, DataLen={DataLen}",
+                                         itemName, rawId, maskedId, item.PositionX, item.PositionY, item.IsFreshDrop, itemData.Length);
+
                         currentOffset += currentStructSize;
                     }
                 }
                 else if (TargetVersion == TargetProtocolVersion.Version075)
                 {
-                    // Use MoneyDropped075 struct for items too in 0.75 for packet 0x20
-                    if (packet.Length < MoneyDropped075.Length) // Check against the minimum size of THIS struct
+                     if (packet.Length < MoneyDropped075.Length) // Check against the minimum size of THIS struct
                     {
                         _logger.LogWarning("⚠️ Dropped Object packet (0.75, 0x20) too short. Length: {Length}", packet.Length);
                         return Task.CompletedTask;
@@ -1465,33 +1484,47 @@ namespace MuOnlineConsole
                     var droppedObjectLegacy = new MoneyDropped075(packet);
                     _logger.LogInformation("💰 Received Dropped Object (0.75): Count={Count}.", droppedObjectLegacy.ItemCount);
 
-                    // 0.75 usually sends one item/money drop per packet for 0x20
                     if (droppedObjectLegacy.ItemCount == 1)
                     {
-                        // --- Apply ID Masking ---
                         ushort rawId = droppedObjectLegacy.Id;
-                        ushort maskedId = (ushort)(rawId & 0x7FFF); // Mask out the highest bit
-                                                                    // ------------------------
+                        ushort maskedId = (ushort)(rawId & 0x7FFF);
                         byte x = droppedObjectLegacy.PositionX;
                         byte y = droppedObjectLegacy.PositionY;
 
-                        // Check if it's money based on known item group/index for money
                         if (droppedObjectLegacy.MoneyGroup == 14 && droppedObjectLegacy.MoneyNumber == 15)
                         {
-                            uint amount = droppedObjectLegacy.Amount; // Use the extension method
-                            _clientState.AddOrUpdateMoneyInScope(maskedId, x, y, amount); // Use maskedId
+                            uint amount = droppedObjectLegacy.Amount;
+                            _clientState.AddOrUpdateMoneyInScope(maskedId, x, y, amount);
                             _logger.LogDebug("  -> Dropped Money (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Amount={Amount}", rawId, maskedId, x, y, amount);
                         }
-                        else // It's an item
+                        else
                         {
-                            // Extract item data (assuming 7 bytes starting after coordinates)
                             const int itemDataOffset = 9;
-                            const int itemDataLength075 = 7;
-                            if (MoneyDropped075.Length >= itemDataOffset + itemDataLength075)
+                            const int itemDataLength075 = 7; // Standard item data length for 0.75
+                            if (packet.Length >= itemDataOffset + itemDataLength075)
                             {
                                 ReadOnlySpan<byte> itemData = packet.Span.Slice(itemDataOffset, itemDataLength075);
-                                _clientState.AddOrUpdateItemInScope(maskedId, x, y, itemData); // Use maskedId
-                                _logger.LogDebug("  -> Dropped Item (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Data={Data}", rawId, maskedId, x, y, Convert.ToHexString(itemData));
+
+                                // --- Get Item Name (0.75) ---
+                                string itemName = "Unknown Item";
+                                if (itemData.Length >= 6) // Check if we have enough data for Group lookup (using S6 logic as fallback)
+                                {
+                                    short itemId = itemData[0];
+                                    byte groupByte = itemData[5];
+                                    byte itemGroup = (byte)(groupByte >> 4);
+                                    itemName = ItemDatabase.GetItemName(itemGroup, itemId) ?? $"Unknown (G:{itemGroup},I:{itemId})";
+                                }
+                                else if (itemData.Length > 0)
+                                {
+                                     short itemId = itemData[0];
+                                     itemName = $"Unknown (ID:{itemId}, Group?)";
+                                     _logger.LogWarning("  -> Dropped Item {Index} (0.75) has insufficient data length ({DataLen}) to determine group.", 0, itemData.Length);
+                                }
+                                // --------------------------
+
+                                _clientState.AddOrUpdateItemInScope(maskedId, x, y, itemData);
+                                _logger.LogDebug("  -> Dropped Item (0.75): Name='{ItemName}', RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Data={Data}",
+                                                 itemName, rawId, maskedId, x, y, Convert.ToHexString(itemData));
                             }
                             else
                             {
