@@ -225,43 +225,60 @@ namespace MuOnlineConsole
         /// </summary>
         public async void SwitchToGameServer(string host, int port)
         {
-            if (_currentState != ClientConnectionState.RequestingConnectionInfo) // Should be after receiving info
+            if (_currentState != ClientConnectionState.RequestingConnectionInfo)
             {
                 _logger.LogWarning("⚠️ Received game server info in unexpected state ({State}). Ignoring.", _currentState);
-                // Maybe reset state? For now, just ignore.
                 return;
             }
-            _currentState = ClientConnectionState.ReceivedConnectionInfo; // Mark as received
+            _currentState = ClientConnectionState.ReceivedConnectionInfo;
 
             _logger.LogInformation("🔌 Disconnecting from Connect Server...");
-            await _connectionManager.DisconnectAsync(); // This now cleans up internally
+
+            // Get a reference to the current connection BEFORE disconnecting
+            var oldConnection = _connectionManager.Connection;
+
+            // Unsubscribe event handlers from the OLD connection immediately
+            if (oldConnection != null)
+            {
+                oldConnection.PacketReceived -= HandlePacketAsync;
+                oldConnection.Disconnected -= HandleDisconnectAsync;
+                _logger.LogDebug("Unsubscribed event handlers from old Connect Server connection.");
+            }
+
+            await _connectionManager.DisconnectAsync(); // Now disconnect and dispose
 
             _logger.LogInformation("🔌 Connecting to Game Server {Host}:{Port}...", host, port);
             _currentState = ClientConnectionState.ConnectingToGameServer;
-            _packetRouter.SetRoutingMode(false); // Route Game Server packets now
+            _packetRouter.SetRoutingMode(false);
 
-            // Re-use the same ConnectionManager instance
-            if (await _connectionManager.ConnectAsync(host, port, true, _cancellationTokenSource?.Token ?? default)) // Game Server uses encryption
+            if (await _connectionManager.ConnectAsync(host, port, true, _cancellationTokenSource?.Token ?? default))
             {
                 _currentState = ClientConnectionState.ConnectedToGameServer;
-                // Re-attach handlers if necessary (DisconnectAsync might clear them)
-                // ConnectionManager's Disconnect/Cleanup should NOT clear external event handlers.
-                // If it does, re-subscribe here:
-                // _connectionManager.Connection.PacketReceived -= HandlePacketAsync; // Unsubscribe previous if needed
-                // _connectionManager.Connection.Disconnected -= HandleDisconnectAsync; // Unsubscribe previous if needed
-                _connectionManager.Connection.PacketReceived += HandlePacketAsync;
-                _connectionManager.Connection.Disconnected += HandleDisconnectAsync;
+
+                // Subscribe event handlers to the NEW connection
+                if (_connectionManager.Connection != null)
+                {
+                    _connectionManager.Connection.PacketReceived += HandlePacketAsync;
+                    _connectionManager.Connection.Disconnected += HandleDisconnectAsync;
+                    _logger.LogDebug("Subscribed event handlers to new Game Server connection.");
+                }
+                else
+                {
+                    // This case should ideally not happen if ConnectAsync returned true, but good to have a check.
+                    _logger.LogError("❌ Failed to get new connection object after connecting to Game Server.");
+                    _currentState = ClientConnectionState.Disconnected;
+                    _cancellationTokenSource?.Cancel(); // Stop the client
+                    return; // Exit the method
+                }
 
                 _logger.LogInformation("✅ Successfully connected to Game Server. Ready to login.");
-                // Now the HandleGameServerEnteredAsync (F1 00) packet handler should trigger the login.
-                // If the server doesn't send F1 00 automatically, we might need to trigger login here.
-                // Let's assume F1 00 is sent by the GS upon connection.
+                // F1 00 handler will trigger login
             }
             else
             {
                 _logger.LogError("❌ Connection to Game Server {Host}:{Port} failed.", host, port);
                 _currentState = ClientConnectionState.Disconnected;
-                _cancellationTokenSource?.Cancel(); // Stop the client
+                _cancellationTokenSource?.Cancel();
             }
         }
 
