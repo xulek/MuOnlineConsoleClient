@@ -2,7 +2,9 @@ using System.Buffers; // Required for ReadOnlySequence<byte>
 using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using MUnique.OpenMU.Network.Packets;
 using MUnique.OpenMU.Network.Packets.ClientToServer;
+using MUnique.OpenMU.Network.Packets.ServerToClient;
 using MUnique.OpenMU.Network.SimpleModulus;
 using MUnique.OpenMU.Network.Xor;
 
@@ -86,6 +88,8 @@ namespace MuOnlineConsole
         private readonly string _password;
         private Dictionary<byte, byte> _serverDirectionMap = new();
         private readonly ConcurrentDictionary<ushort, ScopeObject> _objectsInScope = new();
+        private readonly ConcurrentDictionary<byte, byte[]> _inventoryItems = new();
+        private byte _inventoryExpansionState = 0; // Stores the state of inventory extensions
 
 
         public bool IsInGame => _isInGame;
@@ -413,6 +417,176 @@ namespace MuOnlineConsole
             }
         }
 
+        /// <summary>
+        /// Updates the character's inventory based on the received packet data.
+        /// Handles different protocol versions.
+        /// </summary>
+        /// <param name="inventoryPacketData">The raw packet data for the inventory.</param>
+        public void UpdateInventory(Memory<byte> inventoryPacketData)
+        {
+            // Clear the old inventory before adding new items
+            _inventoryItems.Clear();
+            try
+            {
+                int itemCount = 0;
+                int firstItemOffset = 0;
+                int itemDataSize = 0; // Size of the item data part ONLY
+
+                // Determine itemCount, offset, and itemDataSize based on protocol version
+                // We'll use the S6 Ref struct for header parsing where possible,
+                // but adjust offsets and item data size manually for older versions.
+                switch (_packetRouter.TargetVersion)
+                {
+                    case TargetProtocolVersion.Season6:
+                        var inventoryS6 = new CharacterInventoryRef(inventoryPacketData.Span);
+                        itemCount = inventoryS6.ItemCount;
+                        firstItemOffset = 6; // C4 Header (5) + ItemCount (1)
+                        itemDataSize = 12;   // S6 Item Data size
+                        _logger.LogInformation("🎒 Updating inventory (S6) ({Count} items)...", itemCount);
+                        break;
+
+                    case TargetProtocolVersion.Version097:
+                        // Use C1HeaderRef for header parsing as CharacterInventory095Ref doesn't exist
+                        var header097 = new C1HeaderWithSubCodeRef(inventoryPacketData.Span); // Assuming F3 10 uses SubCode
+                        if (header097.Code != 0xF3 || header097.SubCode != 0x10)
+                        {
+                            _logger.LogWarning("Received unexpected packet instead of 0.97 Inventory.");
+                            return;
+                        }
+                        itemCount = inventoryPacketData.Span[4]; // Item count is at index 4 for C1 packets
+                        firstItemOffset = 5; // C1 Header (4) + ItemCount (1)
+                        itemDataSize = 11;   // 0.95/0.97 Item Data size
+                        _logger.LogInformation("🎒 Updating inventory (0.97/0.95) ({Count} items)...", itemCount);
+                        break;
+
+                    case TargetProtocolVersion.Version075:
+                        // Use C1HeaderRef for header parsing as CharacterInventory075Ref doesn't exist
+                        var header075 = new C1HeaderWithSubCodeRef(inventoryPacketData.Span); // Assuming F3 10 uses SubCode
+                        if (header075.Code != 0xF3 || header075.SubCode != 0x10)
+                        {
+                            _logger.LogWarning("Received unexpected packet instead of 0.75 Inventory.");
+                            return;
+                        }
+                        itemCount = inventoryPacketData.Span[4]; // Item count is at index 4 for C1 packets
+                        firstItemOffset = 5; // C1 Header (4) + ItemCount (1)
+                        itemDataSize = 7;    // 0.75 Item Data size
+                        _logger.LogInformation("🎒 Updating inventory (0.75) ({Count} items)...", itemCount);
+                        break;
+
+                    default:
+                        _logger.LogWarning("Inventory handling for version {Version} not implemented.", _packetRouter.TargetVersion);
+                        return; // Exit if version not handled
+                }
+
+                int storedItemSize = 1 + itemDataSize; // Total size: Slot byte (1) + Item Data
+
+                // Generic loop to process items based on determined parameters
+                int currentOffset = firstItemOffset;
+                for (int i = 0; i < itemCount; i++)
+                {
+                    if (currentOffset >= inventoryPacketData.Length)
+                    {
+                        _logger.LogWarning("Inventory packet too short while parsing item {ItemIndex}", i);
+                        break; // Prevent reading out of bounds
+                    }
+
+                    byte itemSlot = inventoryPacketData.Span[currentOffset];
+
+                    if (currentOffset + storedItemSize > inventoryPacketData.Length)
+                    {
+                        _logger.LogWarning("Inventory packet too short for full item data at slot {Slot}, index {ItemIndex}", itemSlot, i);
+                        break; // Prevent reading out of bounds
+                    }
+
+                    // Extract the item data based on the calculated size for the version
+                    var itemData = inventoryPacketData.Slice(currentOffset + 1, itemDataSize);
+                    _inventoryItems.TryAdd(itemSlot, itemData.ToArray()); // Store a copy of the item data
+                    _logger.LogDebug($"  -> Slot {itemSlot}: {ItemDatabase.GetItemName(itemData.Span) ?? "Unknown Item"} (DataLen: {itemDataSize})");
+
+                    currentOffset += storedItemSize; // Move to the next item
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error processing inventory packet.");
+            }
+            UpdateConsoleTitle(); // Update console title if needed
+        }
+
+
+        /// <summary>
+        /// Updates the state of the inventory expansion.
+        /// </summary>
+        /// <param name="expansionState">The expansion state byte from the server.</param>
+        public void UpdateInventoryExpansion(byte expansionState)
+        {
+            _inventoryExpansionState = expansionState;
+            _logger.LogInformation("💾 Inventory Expansion State: {State}", expansionState);
+        }
+
+        /// <summary>
+        /// Displays the current character statistics in the console.
+        /// </summary>
+        private void DisplayCharacterStats()
+        {
+            if (!IsInGame)
+            {
+                _logger.LogWarning("Cannot display stats - character not in game.");
+                return;
+            }
+
+            Console.WriteLine("\n--- Character Stats ---");
+            Console.WriteLine($"  Name: {_characterName} (ID: {_characterId:X4})");
+            Console.WriteLine($"  Position: ({_currentX}, {_currentY})");
+            Console.WriteLine($"  HP: {_currentHealth}/{_maximumHealth}");
+            Console.WriteLine($"  Mana: {_currentMana}/{_maximumMana}");
+            Console.WriteLine($"  SD: {_currentShield}/{_maximumShield}");
+            Console.WriteLine($"  AG: {_currentAbility}/{_maximumAbility}");
+            Console.WriteLine($"  Strength: {_strength}");
+            Console.WriteLine($"  Agility: {_agility}");
+            Console.WriteLine($"  Vitality: {_vitality}");
+            Console.WriteLine($"  Energy: {_energy}");
+            Console.WriteLine($"  Command: {_leadership}");
+            Console.WriteLine("-----------------------\n");
+        }
+
+        /// <summary>
+        /// Displays the current character inventory in the console.
+        /// </summary>
+        private void DisplayInventory()
+        {
+            if (!IsInGame)
+            {
+                _logger.LogWarning("Cannot display inventory - character not in game.");
+                return;
+            }
+
+            Console.WriteLine("\n--- Inventory ---");
+            if (_inventoryItems.IsEmpty)
+            {
+                Console.WriteLine(" (Inventory is empty)");
+            }
+            else
+            {
+                // Sort by slot index for better readability
+                foreach (var kvp in _inventoryItems.OrderBy(kv => kv.Key))
+                {
+                    byte slot = kvp.Key;
+                    byte[] itemData = kvp.Value;
+                    string itemName = ItemDatabase.GetItemName(itemData) ?? "Unknown Item";
+                    // TODO: Add parsing for level, options, durability etc. from itemData for a more detailed view
+                    Console.WriteLine($"  Slot {slot,3}: {itemName}");
+                }
+            }
+            Console.WriteLine($"  Expansion State: {_inventoryExpansionState}"); // Display expansion state
+            Console.WriteLine("-----------------\n");
+        }
+
+
+        /// <summary>
+        /// Handles the main command loop for user input.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
         private async Task CommandLoopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("⌨️ Command loop started. Type 'exit' to quit.");
@@ -421,7 +595,7 @@ namespace MuOnlineConsole
                 string? commandLine = null;
                 try
                 {
-                    // Use ReadLineAsync with cancellation token 
+                    // Use ReadLineAsync with cancellation token
                     commandLine = await Console.In.ReadLineAsync(cancellationToken);
                 }
                 catch (OperationCanceledException) { break; } // Expected when shutting down
@@ -682,6 +856,17 @@ namespace MuOnlineConsole
                                 _logger.LogWarning("Invalid 'pickup' command format. Use: 'pickup near' or 'pickup <ItemID>'.");
                             }
                             break;
+
+                        // --- New Commands ---
+                        case "stats":
+                            DisplayCharacterStats();
+                            break;
+
+                        case "inv":
+                        case "inventory":
+                            DisplayInventory();
+                            break;
+                        // --- End of New Commands ---
 
                         default:
                             _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);

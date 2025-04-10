@@ -582,22 +582,18 @@ namespace MuOnlineConsole
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0xF3, 0x10)]
+        [PacketHandler(0xF3, 0x10)] // CharacterInventory
         private Task HandleCharacterInventoryAsync(Memory<byte> packet)
         {
             try
             {
-                if (TargetVersion >= TargetProtocolVersion.Season6)
-                {
-                    var inventory = new CharacterInventory(packet);
-                    _logger.LogInformation("🎒 Received CharacterInventory: {Count} items.", inventory.ItemCount);
-                }
-                else
-                {
-                    _logger.LogWarning("⚠️ CharacterInventory handling for version {Version} is not implemented.", TargetVersion);
-                }
+                // Pass the entire packet data to SimpleLoginClient for processing
+                _clientState.UpdateInventory(packet);
             }
-            catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CharacterInventory."); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error processing CharacterInventory packet.");
+            }
             return Task.CompletedTask;
         }
 
