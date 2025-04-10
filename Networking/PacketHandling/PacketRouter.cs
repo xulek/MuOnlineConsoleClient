@@ -237,8 +237,16 @@ namespace MuOnlineConsole
                 {
                     var handlerDelegate = (Func<Memory<byte>, Task>)Delegate.CreateDelegate(typeof(Func<Memory<byte>, Task>), this, method);
                     var handlerKey = (attr.MainCode, attr.SubCode);
-                    if (_packetHandlers.ContainsKey(handlerKey)) { _logger.LogWarning("⚠️ Duplicate packet handler registration attempted for {MainCode:X2}-{SubCode:X2}. Method {MethodName} ignored.", attr.MainCode, attr.SubCode, method.Name); }
-                    else { _packetHandlers[handlerKey] = handlerDelegate; count++; }
+                    if (_packetHandlers.ContainsKey(handlerKey))
+                    {
+                        _logger.LogWarning("⚠️ Duplicate packet handler registration attempted for {MainCode:X2}-{SubCode:X2}. Method {MethodName} ignored.", attr.MainCode, attr.SubCode, method.Name);
+                    }
+                    else
+                    {
+                        _packetHandlers[handlerKey] = handlerDelegate;
+                        count++;
+                        _logger.LogTrace("Registered handler for {MainCode:X2}-{SubCode:X2}: {MethodName}", attr.MainCode, attr.SubCode, method.Name); // Added trace log
+                    }
                 }
                 catch (Exception ex) { _logger.LogError(ex, "💥 Failed to create delegate for handler method {MethodName}. Skipping registration.", method.Name); }
             }
@@ -1157,7 +1165,7 @@ namespace MuOnlineConsole
                             }
 
                             // Use the masked ID when adding/updating
-                            _clientState.AddOrUpdatePlayerInScope(id, x, y, name);
+                            _clientState.AddOrUpdatePlayerInScope(id, rawId, x, y, name);
 
                             // Log both raw and masked IDs for debugging
                             _logger.LogDebug("  -> Character in scope (S6): Index={Index}, RawID={RawId:X4}, MaskedID={Id:X4}, Name='{Name}', Effects={EffectCount}, Size={Size}", i, rawId, id, name, effectCount, fullCharacterSize);
@@ -1180,7 +1188,7 @@ namespace MuOnlineConsole
                             var c = scope097[i];
                             ushort rawId097 = c.Id;
                             ushort maskedId097 = (ushort)(rawId097 & 0x7FFF); // Apply mask
-                            _clientState.AddOrUpdatePlayerInScope(maskedId097, c.CurrentPositionX, c.CurrentPositionY, c.Name); // Use masked ID
+                            _clientState.AddOrUpdatePlayerInScope(maskedId097, rawId097, c.CurrentPositionX, c.CurrentPositionY, c.Name); // Use masked ID
                             _logger.LogDebug("  -> Character in scope (0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Name='{Name}'", rawId097, maskedId097, c.Name);
                             if (c.Name == characterNameToFind && _clientState.GetCharacterId() == 0xFFFF) // Only set if not already set
                             {
@@ -1197,7 +1205,7 @@ namespace MuOnlineConsole
                             var c = scope075[i];
                             ushort rawId075 = c.Id;
                             ushort maskedId075 = (ushort)(rawId075 & 0x7FFF); // Apply mask
-                            _clientState.AddOrUpdatePlayerInScope(maskedId075, c.CurrentPositionX, c.CurrentPositionY, c.Name); // Use masked ID
+                            _clientState.AddOrUpdatePlayerInScope(maskedId075, rawId075, c.CurrentPositionX, c.CurrentPositionY, c.Name); // Use masked ID
                             _logger.LogDebug("  -> Character in scope (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Name='{Name}'", rawId075, maskedId075, c.Name);
                             if (c.Name == characterNameToFind && _clientState.GetCharacterId() == 0xFFFF) // Only set if not already set
                             {
@@ -1294,20 +1302,31 @@ namespace MuOnlineConsole
                 ushort killedId = deathInfo.KilledId;
                 ushort killerId = deathInfo.KillerId; // ID of the object which performed the kill
 
+                // --- Get Killer Name ---
+                string killerName = "Unknown Killer";
+                if (_clientState.TryGetScopeObjectName(killerId, out string? name)) // Use TryGet method
+                {
+                    killerName = name ?? "Unknown Player/NPC"; // Handle null case from TryGet
+                }
+                // -----------------------
+
                 if (killedId == _clientState.GetCharacterId())
                 {
-                    // Our character died
-                    _logger.LogWarning("💀 You died! Killed by object {KillerId:X4}.", killerId);
-                    // TODO Mark as not in game (or maybe a specific 'Dead' state)
-                    _clientState.UpdateCurrentHealthShield(0, 0); // Update UI immediately
-                    _clientState.SignalMovementHandled(); // Stop any ongoing walk
-                                                          // The server should send a respawn packet (e.g., F3 04) later
+                    _logger.LogWarning("💀 You died! Killed by {KillerName} ({KillerId:X4}).", killerName, killerId);
+                    _clientState.UpdateCurrentHealthShield(0, 0);
+                    _clientState.SignalMovementHandled();
                 }
                 else
                 {
-                    // Another object died
-                    _logger.LogInformation("💀 Object {KilledId:X4} died. Killed by {KillerId:X4}.", killedId, killerId);
-                    _clientState.RemoveObjectFromScope(killedId); // Remove the object from the scope
+                    // --- Get Killed Name ---
+                    string killedName = "Unknown Object";
+                    if (_clientState.TryGetScopeObjectName(killedId, out string? nameKilled))
+                    {
+                        killedName = nameKilled ?? "Unknown Player/NPC/Item";
+                    }
+                    // -----------------------
+                    _logger.LogInformation("💀 Object {KilledName} ({KilledId:X4}) died. Killed by {KillerName} ({KillerId:X4}).", killedName, killedId, killerName, killerId);
+                    _clientState.RemoveObjectFromScope(killedId);
                 }
             }
             catch (Exception ex)
@@ -1332,7 +1351,7 @@ namespace MuOnlineConsole
                             var npc = scopeS6[i];
                             ushort rawIdS6 = npc.Id;
                             ushort maskedIdS6 = (ushort)(rawIdS6 & 0x7FFF); // Apply mask
-                            _clientState.AddOrUpdateNpcInScope(maskedIdS6, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
+                            _clientState.AddOrUpdateNpcInScope(maskedIdS6, rawIdS6, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
                             _logger.LogDebug("  -> NPC in scope (S6): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Type={Type}, Pos=({X},{Y})", rawIdS6, maskedIdS6, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
                         }
                         break; // End Season 6 case
@@ -1346,7 +1365,7 @@ namespace MuOnlineConsole
                             var npc = scope097[i];
                             ushort rawId097 = npc.Id;
                             ushort maskedId097 = (ushort)(rawId097 & 0x7FFF); // Apply mask
-                            _clientState.AddOrUpdateNpcInScope(maskedId097, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
+                            _clientState.AddOrUpdateNpcInScope(maskedId097, rawId097, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
                             _logger.LogDebug("  -> NPC in scope (0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Type={Type}, Pos=({X},{Y})", rawId097, maskedId097, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
                         }
                         break; // End 0.97 case
@@ -1359,7 +1378,7 @@ namespace MuOnlineConsole
                             var npc = scope075[i];
                             ushort rawId075 = npc.Id;
                             ushort maskedId075 = (ushort)(rawId075 & 0x7FFF); // Apply mask
-                            _clientState.AddOrUpdateNpcInScope(maskedId075, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
+                            _clientState.AddOrUpdateNpcInScope(maskedId075, rawId075, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber); // Use masked ID
                             _logger.LogDebug("  -> NPC in scope (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Type={Type}, Pos=({X},{Y})", rawId075, maskedId075, npc.TypeNumber, npc.CurrentPositionX, npc.CurrentPositionY);
                         }
                         break; // End 0.75 case
@@ -1452,14 +1471,14 @@ namespace MuOnlineConsole
 
                         if (isMoney)
                         {
-                            _clientState.AddOrUpdateMoneyInScope(maskedId, item.PositionX, item.PositionY, moneyAmount);
+                            _clientState.AddOrUpdateMoneyInScope(maskedId, rawId, item.PositionX, item.PositionY, moneyAmount);
                             _logger.LogDebug("  -> Dropped Money (S6/0.97): Amount={Amount} (from ItemData[4]), RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Fresh={Fresh}",
                                              moneyAmount, rawId, maskedId, item.PositionX, item.PositionY, item.IsFreshDrop);
                         }
                         else // Regular item
                         {
                             string itemName = ItemDatabase.GetItemName(itemData) ?? $"Unknown (Data: {Convert.ToHexString(itemData)})";
-                            _clientState.AddOrUpdateItemInScope(maskedId, item.PositionX, item.PositionY, itemData);
+                            _clientState.AddOrUpdateItemInScope(maskedId, rawId, item.PositionX, item.PositionY, itemData);
                             _logger.LogDebug("  -> Dropped Item (S6/0.97): Name='{ItemName}', RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Fresh={Fresh}, DataLen={DataLen}",
                                              itemName, rawId, maskedId, item.PositionX, item.PositionY, item.IsFreshDrop, itemData.Length);
                         }
@@ -1489,7 +1508,7 @@ namespace MuOnlineConsole
                         if (droppedObjectLegacy.MoneyGroup == 14 && droppedObjectLegacy.MoneyNumber == 15)
                         {
                             uint amount = droppedObjectLegacy.Amount(); // Use extension method
-                            _clientState.AddOrUpdateMoneyInScope(maskedId, x, y, amount);
+                            _clientState.AddOrUpdateMoneyInScope(maskedId, rawId, x, y, amount);
                             _logger.LogDebug("  -> Dropped Money (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Amount={Amount}", rawId, maskedId, x, y, amount);
                         }
                         else
@@ -1500,7 +1519,7 @@ namespace MuOnlineConsole
                             {
                                 ReadOnlySpan<byte> itemData = packet.Span.Slice(itemDataOffset, itemDataLength075);
                                 string itemName = ItemDatabase.GetItemName(itemData) ?? $"Unknown (Data: {Convert.ToHexString(itemData)})";
-                                _clientState.AddOrUpdateItemInScope(maskedId, x, y, itemData);
+                                _clientState.AddOrUpdateItemInScope(maskedId, rawId, x, y, itemData);
                                 _logger.LogDebug("  -> Dropped Item (0.75): Name='{ItemName}', RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Data={Data}",
                                                  itemName, rawId, maskedId, x, y, Convert.ToHexString(itemData));
                             }
@@ -1527,6 +1546,105 @@ namespace MuOnlineConsole
             catch (Exception ex)
             {
                 _logger.LogError(ex, "💥 General error parsing ItemsDropped (20). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+            }
+            return Task.CompletedTask;
+        }
+
+        // Add this handler method (or modify if existing)
+        [PacketHandler(0x22, 0xFE)]
+        private Task HandleInventoryMoneyUpdateAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < InventoryMoneyUpdate.Length)
+                {
+                    _logger.LogWarning("⚠️ Received InventoryMoneyUpdate packet (0x22, FE) with unexpected length {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
+                    return Task.CompletedTask;
+                }
+                var moneyUpdate = new InventoryMoneyUpdate(packet);
+                _logger.LogInformation("💰 Inventory Money Updated: {Amount} Zen.", moneyUpdate.Money);
+
+                // We might have just picked up money after walking to it
+                _clientState.SignalMovementHandledIfWalking();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing InventoryMoneyUpdate (22, FE). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+                _clientState.SignalMovementHandledIfWalking(); // Ensure lock release on error
+            }
+            return Task.CompletedTask;
+        }
+
+        [PacketHandler(0x22, NoSubCode)] // Handles C3 22 and implicitly C1 22
+        private Task HandleItemAddedToInventoryAsync(Memory<byte> packet)
+        {
+            byte headerType = packet.Span[0];
+            try
+            {
+                int requiredSize = ItemAddedToInventory.GetRequiredSize(0);
+                if (packet.Length < requiredSize)
+                {
+                    _logger.LogWarning("⚠️ Received ItemAddedToInventory packet (0x22) with invalid length {Length} (minimum required: {Required}). Packet data: {PacketData}",
+                                       packet.Length, requiredSize, Convert.ToHexString(packet.Span));
+                    _logger.LogInformation("❌ Pickup failed: incomplete packet. The item was likely not picked up because it may still belong to another player. Please wait a moment before trying again.");
+                    // _clientState.SignalPickupNotCompleted();
+                    return Task.CompletedTask;
+                }
+
+                var itemAdded = new ItemAddedToInventory(packet);
+                var itemData = itemAdded.ItemData;
+                _clientState.PickupHandled = true;
+
+                if (itemData.Length < 6)
+                {
+                    _clientState.LastPickupSucceeded = false;
+                    _logger.LogWarning("⚠️ ItemData too short (Length: {Length}) — minimum 6 bytes required. Raw packet: {PacketData}",
+                                       itemData.Length, Convert.ToHexString(packet.Span));
+                    _logger.LogInformation("❌ Pickup failed: malformed item data. The item was likely not picked up because it may still belong to another player. Please wait a moment before trying again.");
+                    // _clientState.SignalPickupNotCompleted();
+                    return Task.CompletedTask;
+                }
+
+                _clientState.LastPickupSucceeded = true;
+
+                string itemName = ItemDatabase.GetItemName(itemData) ?? "Unknown Item";
+                _logger.LogInformation("✅ Item '{ItemName}' added/updated in inventory slot {Slot}. Packet Type: {HeaderType:X2}",
+                                       itemName, itemAdded.InventorySlot, headerType);
+
+                _clientState.SignalMovementHandledIfWalking();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error while processing ItemAddedToInventory (0x22). Packet Type: {HeaderType:X2}, Data: {PacketData}",
+                                 headerType, Convert.ToHexString(packet.Span));
+                _clientState.SignalMovementHandledIfWalking();
+            }
+            return Task.CompletedTask;
+        }
+
+
+        [PacketHandler(0x22, 0xFF)] // Handles C3 22 FF explicitly
+        private Task HandleItemPickupFailedSubCodeAsync(Memory<byte> packet)
+        {
+            try
+            {
+                // Check length for the specific failure packet struct
+                if (packet.Length < ItemPickUpRequestFailed.Length)
+                {
+                    _logger.LogWarning("⚠️ Received ItemPickupFailed packet (0x22, FF) with unexpected length {Length}. Packet: {PacketData}", packet.Length, Convert.ToHexString(packet.Span));
+                    return Task.CompletedTask;
+                }
+
+                var response = new ItemPickUpRequestFailed(packet); // Use the correct struct
+                _logger.LogWarning("❌ Item pickup failed: {Reason} ({ReasonValue})", response.FailReason, (byte)response.FailReason);
+
+                // Signal movement handled, as pickup usually happens after moving close to an item
+                _clientState.SignalMovementHandledIfWalking();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error parsing ItemPickupFailed (22, FF). Packet: {PacketData}", Convert.ToHexString(packet.Span));
+                _clientState.SignalMovementHandledIfWalking(); // Ensure lock release on error
             }
             return Task.CompletedTask;
         }
@@ -1626,7 +1744,7 @@ namespace MuOnlineConsole
                 ushort maskedId = (ushort)(rawId & 0x7FFF); // Mask out the highest bit
                                                             // ------------------------
 
-                _clientState.AddOrUpdateMoneyInScope(maskedId, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.Amount); // Use maskedId
+                _clientState.AddOrUpdateMoneyInScope(maskedId, rawId, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.Amount); // Use maskedId
                 _logger.LogInformation("💰 Received MoneyDroppedExtended (2F): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Amount={Amount}, Pos=({X},{Y}), Fresh={Fresh}",
                     rawId, maskedId, moneyDrop.Amount, moneyDrop.PositionX, moneyDrop.PositionY, moneyDrop.IsFreshDrop);
             }

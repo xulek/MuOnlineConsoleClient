@@ -95,6 +95,36 @@ namespace MuOnlineConsole
             return packetSize;
         }
 
+        /// <summary>
+        /// Builds the packet to request picking up an item from the ground.
+        /// </summary>
+        /// <param name="writer">The buffer writer.</param>
+        /// <param name="itemId">The id of the item on the ground.</param>
+        /// <param name="version">The target protocol version.</param>
+        /// <returns>The size of the built packet.</returns>
+        public static int BuildPickupItemRequestPacket(IBufferWriter<byte> writer, ushort itemId, TargetProtocolVersion version)
+        {
+            // Choose the correct packet structure based on the version
+            if (version == TargetProtocolVersion.Version097 || version == TargetProtocolVersion.Season6) // C3 22 is used from 0.97 onwards
+            {
+                int packetSize = PickupItemRequest.Length;
+                var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+                var packet = new PickupItemRequest(memory);
+                packet.ItemId = itemId; // Item ID is BigEndian in this version
+                                        // The implicit struct constructor already sets Header Type/Code/Length
+                return packetSize;
+            }
+            else // Version075 uses C1 22
+            {
+                int packetSize = PickupItemRequest075.Length;
+                var memory = writer.GetMemory(packetSize).Slice(0, packetSize);
+                var packet = new PickupItemRequest075(memory);
+                packet.ItemId = itemId; // Item ID is BigEndian in this version
+                                        // The implicit struct constructor already sets Header Type/Code/Length
+                return packetSize;
+            }
+        }
+
         public static int BuildAnimationRequestPacket(IBufferWriter<byte> writer, byte rotation, byte animationNumber)
         {
             int packetSize = AnimationRequest.Length;

@@ -2,6 +2,7 @@ using System.Buffers; // Required for ReadOnlySequence<byte>
 using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using MUnique.OpenMU.Network.Packets.ClientToServer;
 using MUnique.OpenMU.Network.SimpleModulus;
 using MUnique.OpenMU.Network.Xor;
 
@@ -91,6 +92,8 @@ namespace MuOnlineConsole
         public bool IsConnected => _connectionManager.IsConnected;
         public ushort GetCharacterId() => _characterId;
         public string GetCharacterName() => _characterName;
+        public bool LastPickupSucceeded { get; set; } = false;
+        public bool PickupHandled { get; set; } = false;
 
         public SimpleLoginClient(ILoggerFactory loggerFactory, MuOnlineSettings settings)
         {
@@ -310,6 +313,106 @@ namespace MuOnlineConsole
             return new ValueTask(_packetRouter.OnDisconnected());
         }
 
+        private static double DistanceSquared(double x1, double y1, double x2, double y2)
+        {
+            double dx = x1 - x2;
+            double dy = y1 - y2;
+            return (dx * dx) + (dy * dy);
+        }
+
+        /// <summary>
+        /// Finds the nearest item (Item or Money) within pickup range and returns its Raw ID.
+        /// Ignores objects at position (0,0).
+        /// </summary>
+        /// <returns>The Raw ID of the nearest item, or null if nothing is found within range.</returns>
+        private ushort? FindNearestPickupItemRawId()
+        {
+            double minDistanceSq = double.MaxValue;
+            ScopeObject? nearestObject = null;
+
+            // Combine the list of items and money to check
+            var groundItems = GetScopeItems(ScopeObjectType.Item).Concat(GetScopeItems(ScopeObjectType.Money));
+
+            foreach (var obj in groundItems)
+            {
+                // Ignore objects at (0,0), they might be invalid
+                if (obj.PositionX == 0 && obj.PositionY == 0) continue;
+
+                double distSq = DistanceSquared(_currentX, _currentY, obj.PositionX, obj.PositionY);
+                if (distSq < minDistanceSq)
+                {
+                    minDistanceSq = distSq;
+                    nearestObject = obj;
+                }
+            }
+
+            // Optional check for maximum pickup distance
+            const double maxPickupDistanceSq = 5 * 5; // Example: Maximum distance of 5 units
+            if (nearestObject != null && minDistanceSq <= maxPickupDistanceSq)
+            {
+                _logger.LogInformation("Nearest object found: {Object} at distance squared {DistanceSq}", nearestObject, minDistanceSq);
+                // Return the RawId of the found object
+                return nearestObject.RawId;
+            }
+            else if (nearestObject != null)
+            {
+                _logger.LogInformation("Nearest object {Object} is too far away (Distance Squared: {DistanceSq})", nearestObject, minDistanceSq);
+                return null;
+            }
+            else
+            {
+                _logger.LogInformation("No items or money found nearby.");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Tries to get the name or description of an object currently in scope by its ID.
+        /// Handles player names, NPC names/types, and descriptions for items/money.
+        /// Automatically applies the ID mask (removes the highest bit).
+        /// </summary>
+        /// <param name="id">The potentially masked ID received from the server.</param>
+        /// <param name="name">When this method returns, contains the name or description of the object, if found; otherwise, null.</param>
+        /// <returns>True if an object with the masked ID was found in scope; otherwise, false.</returns>
+        public bool TryGetScopeObjectName(ushort id, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out string? name)
+        {
+            // Always mask the ID before looking it up, as dictionary keys are masked IDs.
+            ushort maskedId = (ushort)(id & 0x7FFF);
+
+            if (_objectsInScope.TryGetValue(maskedId, out ScopeObject? scopeObject))
+            {
+                switch (scopeObject.ObjectType)
+                {
+                    case ScopeObjectType.Player:
+                        name = ((PlayerScopeObject)scopeObject).Name;
+                        return true;
+                    case ScopeObjectType.Npc:
+                    case ScopeObjectType.Monster: // Treat Monster similar to NPC for naming
+                        var npcObject = (NpcScopeObject)scopeObject;
+                        // Prefer name if available, otherwise use type number
+                        name = !string.IsNullOrWhiteSpace(npcObject.Name) ? npcObject.Name : $"NPC Type {npcObject.TypeNumber}";
+                        return true;
+                    case ScopeObjectType.Item:
+                        name = ((ItemScopeObject)scopeObject).ItemDescription; // Use the generated description
+                        return true;
+                    case ScopeObjectType.Money:
+                        name = "Zen"; // Money is typically just "Zen"
+                        return true;
+                    default:
+                        name = $"Unknown Object Type ({scopeObject.ObjectType})";
+                        _logger.LogWarning("Found object with ID {MaskedId:X4} but unknown type {Type}", maskedId, scopeObject.ObjectType);
+                        return true; // Technically found, but type is unknown
+                }
+            }
+            else
+            {
+                // Object not found in scope
+                name = null;
+                _logger.LogTrace("Object with masked ID {MaskedId:X4} (from RawID {RawId:X4}) not found in scope.", maskedId, id);
+                return false;
+            }
+        }
+
         private async Task CommandLoopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("⌨️ Command loop started. Type 'exit' to quit.");
@@ -318,8 +421,7 @@ namespace MuOnlineConsole
                 string? commandLine = null;
                 try
                 {
-                    // Use Task.Run to avoid blocking the main thread if Console.In blocks unexpectedly
-                    // *** FIX 1: Await the ValueTask<string?> ***
+                    // Use ReadLineAsync with cancellation token 
                     commandLine = await Console.In.ReadLineAsync(cancellationToken);
                 }
                 catch (OperationCanceledException) { break; } // Expected when shutting down
@@ -451,7 +553,7 @@ namespace MuOnlineConsole
                                         await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
 
                                         _logger.LogDebug("🚶 Sending WalkRequest. Client Position: ({CurrentX},{CurrentY}), Target: ({TargetX},{TargetY}), Original Path: [{OrigPath}], Translated Path: [{TransPath}]",
-                                                         _currentX, _currentY, targetX, targetY, string.Join(",", generatedPath), string.Join(",", translatedPath));
+                                                            _currentX, _currentY, targetX, targetY, string.Join(",", generatedPath), string.Join(",", translatedPath));
                                         await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedPath);
                                     }
                                     catch (OperationCanceledException) { _isWalking = false; break; }
@@ -507,6 +609,80 @@ namespace MuOnlineConsole
                             }
                             break;
 
+                        case "pickup":
+                            if (!IsInGame)
+                            {
+                                _logger.LogWarning("Cannot pick up item - character is not in game.");
+                                continue;
+                            }
+
+                            if (parts.Length == 2)
+                            {
+                                ushort? targetItemIdRaw = null;
+                                string inputIdString = parts[1];
+
+                                if (inputIdString.ToLowerInvariant() == "near")
+                                {
+                                    targetItemIdRaw = FindNearestPickupItemRawId();
+                                    if (!targetItemIdRaw.HasValue)
+                                    {
+                                        _logger.LogInformation("No nearby items found to pick up.");
+                                        continue;
+                                    }
+
+                                    _logger.LogInformation("👜 Attempting to pick up nearest item (Raw ID {RawId:X4})...", targetItemIdRaw.Value);
+
+                                    // Retry loop: up to 20 attempts, sometimes an item is blocked because it belongs to another player u have to wait a certain amount of time
+                                    int attempts = 0;
+                                    const int maxAttempts = 20;
+                                    bool pickupSuccess = false;
+                                    DateTime startTime = DateTime.UtcNow;
+
+                                    while (!pickupSuccess && attempts < maxAttempts && (DateTime.UtcNow - startTime).TotalSeconds < 20)
+                                    {
+                                        await SendPickupRequest(targetItemIdRaw.Value);
+                                        await Task.Delay(1000); // Wait 1000 ms between retries
+
+                                        // Check if the item is still available. If not, we assume it was picked up.
+                                        ushort? currentItemId = FindNearestPickupItemRawId();
+                                        if (!currentItemId.HasValue || currentItemId.Value != targetItemIdRaw.Value)
+                                        {
+                                            pickupSuccess = true;
+                                            _logger.LogInformation("✅ Item (Raw ID {RawId:X4}) was successfully picked up after {Attempts} attempts.", targetItemIdRaw.Value, attempts + 1);
+                                        }
+
+                                        attempts++;
+                                    }
+
+                                    if (!pickupSuccess)
+                                    {
+                                        _logger.LogWarning("⚠️ Failed to pick up item (Raw ID {RawId:X4}) after {Attempts} attempts.", targetItemIdRaw.Value, attempts);
+                                    }
+                                }
+                                else if (ushort.TryParse(inputIdString, System.Globalization.NumberStyles.HexNumber, null, out ushort itemIdHexRaw))
+                                {
+                                    targetItemIdRaw = itemIdHexRaw;
+                                    _logger.LogInformation("👜 Attempting to pick up item with Raw ID {ItemId:X4} (parsed as hex from input '{Input}')...", targetItemIdRaw.Value, inputIdString);
+                                    await SendPickupRequest(targetItemIdRaw.Value);
+                                }
+                                else if (ushort.TryParse(inputIdString, out ushort itemIdDecRaw))
+                                {
+                                    targetItemIdRaw = itemIdDecRaw;
+                                    _logger.LogInformation("👜 Attempting to pick up item with Raw ID {ItemId:X4} (parsed as decimal from input '{Input}')...", targetItemIdRaw.Value, inputIdString);
+                                    await SendPickupRequest(targetItemIdRaw.Value);
+                                }
+                                else
+                                {
+                                    _logger.LogWarning("Invalid pickup target '{Target}'. Use: 'pickup near' or 'pickup <ItemID_Hex_Or_Dec>'.", inputIdString);
+                                    continue;
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Invalid 'pickup' command format. Use: 'pickup near' or 'pickup <ItemID>'.");
+                            }
+                            break;
+
                         default:
                             _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
                             break;
@@ -518,6 +694,32 @@ namespace MuOnlineConsole
                 }
             }
             _logger.LogInformation("⌨️ Command loop ended.");
+        }
+
+        private async Task SendPickupRequest(ushort targetItemIdRaw)
+        {
+            ushort itemIdMasked = (ushort)(targetItemIdRaw & 0x7FFF);
+
+            try
+            {
+                using var owner = MemoryPool<byte>.Shared.Rent(32);
+                var writer = new ArrayBufferWriter<byte>();
+
+                // Build the pickup packet using the raw item ID (it will be masked before sending)
+                int packetSize = PacketBuilder.BuildPickupItemRequestPacket(writer, targetItemIdRaw, _packetRouter.TargetVersion);
+                var packetBytes = writer.WrittenSpan;
+
+                _logger.LogDebug("   -> Preparing pickup packet (Masked ID: {MaskedId:X4}, Version: {Version}): {PacketData}",
+                                 itemIdMasked, _packetRouter.TargetVersion, Convert.ToHexString(packetBytes));
+
+                // Send the pickup request packet using C3 header
+                await _connectionManager.Connection.SendPickupItemRequestAsync(itemIdMasked);
+                _logger.LogInformation("✔️ Pickup request sent for RAW ID {RawID:X4}.", targetItemIdRaw);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error while building or sending pickup packet for Masked ID {MaskedId:X4}.", itemIdMasked);
+            }
         }
 
         private byte TranslateDirection(byte standardDirection)
@@ -741,25 +943,25 @@ namespace MuOnlineConsole
                 _strength, _agility, _vitality, _energy, _leadership);
         }
 
-        public void AddOrUpdatePlayerInScope(ushort id, byte x, byte y, string name)
+        public void AddOrUpdatePlayerInScope(ushort maskedId, ushort rawId, byte x, byte y, string name)
         {
-            var player = new PlayerScopeObject(id, x, y, name);
-            _objectsInScope.AddOrUpdate(id, player, (_, existing) =>
+            var player = new PlayerScopeObject(maskedId, rawId, x, y, name);
+            _objectsInScope.AddOrUpdate(maskedId, player, (_, existing) =>
             {
-                // Update existing if needed (position, name potentially?)
                 existing.PositionX = x;
                 existing.PositionY = y;
-                ((PlayerScopeObject)existing).Name = name; // Cast needed if base class doesn't have Name
+                ((PlayerScopeObject)existing).Name = name;
                 existing.LastUpdate = DateTime.UtcNow;
+                // NOTE: RawId is init-only, no need to update here if it doesn't change for existing objects
                 return existing;
             });
-            _logger.LogTrace("Scope Add/Update: Player {Name} ({Id:X4}) at [{X},{Y}]", name, id, x, y);
+            _logger.LogTrace("Scope Add/Update: Player {Name} ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", name, maskedId, rawId, x, y);
         }
 
-        public void AddOrUpdateNpcInScope(ushort id, byte x, byte y, ushort typeNumber, string? name = null)
+        public void AddOrUpdateNpcInScope(ushort maskedId, ushort rawId, byte x, byte y, ushort typeNumber, string? name = null)
         {
-            var npc = new NpcScopeObject(id, x, y, typeNumber, name);
-            _objectsInScope.AddOrUpdate(id, npc, (_, existing) =>
+            var npc = new NpcScopeObject(maskedId, rawId, x, y, typeNumber, name);
+            _objectsInScope.AddOrUpdate(maskedId, npc, (_, existing) =>
             {
                 existing.PositionX = x;
                 existing.PositionY = y;
@@ -768,35 +970,34 @@ namespace MuOnlineConsole
                 existing.LastUpdate = DateTime.UtcNow;
                 return existing;
             });
-            _logger.LogTrace("Scope Add/Update: NPC Type {Type} ({Id:X4}) at [{X},{Y}]", typeNumber, id, x, y);
+            _logger.LogTrace("Scope Add/Update: NPC Type {Type} ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", typeNumber, maskedId, rawId, x, y);
         }
 
-        public void AddOrUpdateItemInScope(ushort id, byte x, byte y, ReadOnlySpan<byte> itemData)
+        public void AddOrUpdateItemInScope(ushort maskedId, ushort rawId, byte x, byte y, ReadOnlySpan<byte> itemData)
         {
-            var item = new ItemScopeObject(id, x, y, itemData);
-            _objectsInScope.AddOrUpdate(id, item, (_, existing) =>
-           {
-               existing.PositionX = x;
-               existing.PositionY = y;
-               // Update item description if needed? Probably not unless data changes
-               existing.LastUpdate = DateTime.UtcNow;
-               return existing;
-           });
-            _logger.LogTrace("Scope Add/Update: Item ({Id:X4}) at [{X},{Y}]", id, x, y);
-        }
-
-        public void AddOrUpdateMoneyInScope(ushort id, byte x, byte y, uint amount)
-        {
-            var money = new MoneyScopeObject(id, x, y, amount);
-            _objectsInScope.AddOrUpdate(id, money, (_, existing) =>
+            var item = new ItemScopeObject(maskedId, rawId, x, y, itemData);
+            _objectsInScope.AddOrUpdate(maskedId, item, (_, existing) =>
             {
                 existing.PositionX = x;
                 existing.PositionY = y;
-                ((MoneyScopeObject)existing).Amount = amount; // Money amount could potentially change? (Unlikely for dropped money)
                 existing.LastUpdate = DateTime.UtcNow;
                 return existing;
             });
-            _logger.LogTrace("Scope Add/Update: Money ({Id:X4}) Amount {Amount} at [{X},{Y}]", id, amount, x, y);
+            _logger.LogTrace("Scope Add/Update: Item ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", maskedId, rawId, x, y);
+        }
+
+        public void AddOrUpdateMoneyInScope(ushort maskedId, ushort rawId, byte x, byte y, uint amount)
+        {
+            var money = new MoneyScopeObject(maskedId, rawId, x, y, amount);
+            _objectsInScope.AddOrUpdate(maskedId, money, (_, existing) =>
+            {
+                existing.PositionX = x;
+                existing.PositionY = y;
+                ((MoneyScopeObject)existing).Amount = amount;
+                existing.LastUpdate = DateTime.UtcNow;
+                return existing;
+            });
+            _logger.LogTrace("Scope Add/Update: Money ({Id:X4}, Raw: {RawId:X4}) Amount {Amount} at [{X},{Y}]", maskedId, rawId, amount, x, y);
         }
 
         /// <summary>

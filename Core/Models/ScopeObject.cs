@@ -1,4 +1,3 @@
-// ScopeObject.cs
 using System.Text;
 using MUnique.OpenMU.Network.Packets; // For CharacterHeroState if needed later
 
@@ -15,22 +14,26 @@ namespace MuOnlineConsole
 
     public abstract class ScopeObject
     {
-        public ushort Id { get; init; }
+        public ushort Id { get; init; } // This will now store the MASKED ID (used as key)
+        public ushort RawId { get; init; } // Add this to store the original Raw ID
         public byte PositionX { get; set; }
         public byte PositionY { get; set; }
         public abstract ScopeObjectType ObjectType { get; }
         public DateTime LastUpdate { get; set; } = DateTime.UtcNow;
 
-        protected ScopeObject(ushort id, byte x, byte y)
+        // Modified constructor to accept both IDs
+        protected ScopeObject(ushort maskedId, ushort rawId, byte x, byte y)
         {
-            Id = id;
+            Id = maskedId;
+            RawId = rawId; // Store the raw ID
             PositionX = x;
             PositionY = y;
         }
 
         public override string ToString()
         {
-            return $"ID: {Id:X4} ({ObjectType}) at [{PositionX},{PositionY}]";
+            // Display both IDs for clarity during debugging/listing
+            return $"ID: {Id:X4} (Raw: {RawId:X4}) ({ObjectType}) at [{PositionX},{PositionY}]";
         }
     }
 
@@ -39,14 +42,17 @@ namespace MuOnlineConsole
         public string Name { get; set; }
         public override ScopeObjectType ObjectType => ScopeObjectType.Player;
 
-        public PlayerScopeObject(ushort id, byte x, byte y, string name) : base(id, x, y)
+        // Modified constructor
+        public PlayerScopeObject(ushort maskedId, ushort rawId, byte x, byte y, string name)
+            : base(maskedId, rawId, x, y)
         {
             Name = name;
         }
 
         public override string ToString()
         {
-            return $"ID: {Id:X4} (Player: {Name}) at [{PositionX},{PositionY}]";
+            // Display both IDs
+            return $"ID: {Id:X4} (Raw: {RawId:X4}) (Player: {Name}) at [{PositionX},{PositionY}]";
         }
     }
 
@@ -56,7 +62,9 @@ namespace MuOnlineConsole
         public ushort TypeNumber { get; set; } // All versions should have this
         public override ScopeObjectType ObjectType => ScopeObjectType.Npc; // Or Monster based on TypeNumber range?
 
-        public NpcScopeObject(ushort id, byte x, byte y, ushort typeNumber, string? name = null) : base(id, x, y)
+        // Modified constructor
+        public NpcScopeObject(ushort maskedId, ushort rawId, byte x, byte y, ushort typeNumber, string? name = null)
+            : base(maskedId, rawId, x, y)
         {
             TypeNumber = typeNumber;
             Name = name;
@@ -65,32 +73,35 @@ namespace MuOnlineConsole
         public override string ToString()
         {
             string identifier = string.IsNullOrWhiteSpace(Name) ? $"Type {TypeNumber}" : Name;
-            return $"ID: {Id:X4} (NPC: {identifier}) at [{PositionX},{PositionY}]";
+            // Display both IDs
+            return $"ID: {Id:X4} (Raw: {RawId:X4}) (NPC: {identifier}) at [{PositionX},{PositionY}]";
         }
     }
 
     public class ItemScopeObject : ScopeObject
     {
-        // TODO: Implement proper item parsing later
         public string ItemDescription { get; set; }
+        public ReadOnlyMemory<byte> ItemData { get; } // Store original data
         public override ScopeObjectType ObjectType => ScopeObjectType.Item;
 
-        public ItemScopeObject(ushort id, byte x, byte y, ReadOnlySpan<byte> itemData) : base(id, x, y)
+        // Modified constructor
+        public ItemScopeObject(ushort maskedId, ushort rawId, byte x, byte y, ReadOnlySpan<byte> itemData)
+            : base(maskedId, rawId, x, y)
         {
-            // Very basic parsing - replace with proper item library usage later
-            ItemDescription = $"Item Data (Len:{itemData.Length})"; // Placeholder
-            if (itemData.Length > 0)
+            ItemData = itemData.ToArray(); // Store a copy
+
+            // Parsing logic (keep as is or improve)
+            ItemDescription = $"Item Data (Len:{ItemData.Length})"; // Placeholder
+            if (ItemData.Length > 0)
             {
-                // Example: Try to get item group/index if possible (adjust based on actual itemData format)
-                // This is highly dependent on the protocol version and item structure
-                // For now, just show the first byte as hex
-                ItemDescription = $"Item (First Byte: {itemData[0]:X2})";
+                ItemDescription = ItemDatabase.GetItemName(ItemData.Span) ?? $"Unknown (Data: {Convert.ToHexString(ItemData.Span)})";
             }
         }
 
         public override string ToString()
         {
-            return $"ID: {Id:X4} (Item: {ItemDescription}) at [{PositionX},{PositionY}]";
+            // Display both IDs
+            return $"ID: {Id:X4} (Raw: {RawId:X4}) (Item: {ItemDescription}) at [{PositionX},{PositionY}]";
         }
     }
 
@@ -99,14 +110,17 @@ namespace MuOnlineConsole
         public uint Amount { get; set; }
         public override ScopeObjectType ObjectType => ScopeObjectType.Money;
 
-        public MoneyScopeObject(ushort id, byte x, byte y, uint amount) : base(id, x, y)
+        // Modified constructor
+        public MoneyScopeObject(ushort maskedId, ushort rawId, byte x, byte y, uint amount)
+            : base(maskedId, rawId, x, y)
         {
             Amount = amount;
         }
 
         public override string ToString()
         {
-            return $"ID: {Id:X4} (Money: {Amount}) at [{PositionX},{PositionY}]";
+            // Display both IDs
+            return $"ID: {Id:X4} (Raw: {RawId:X4}) (Money: {Amount}) at [{PositionX},{PositionY}]";
         }
     }
 }
