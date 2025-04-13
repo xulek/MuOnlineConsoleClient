@@ -183,6 +183,7 @@ namespace MuOnlineConsole.Client
 
         /// <summary>
         /// Establishes a connection to the Connect Server asynchronously.
+        /// This now includes explicitly starting the receiver loop after successful connection.
         /// </summary>
         /// <param name="cancellationToken">The cancellation token that can be used to cancel the operation.</param>
         private async Task ConnectToConnectServerAsync(CancellationToken cancellationToken)
@@ -190,15 +191,37 @@ namespace MuOnlineConsole.Client
             _currentState = ClientConnectionState.ConnectingToConnectServer;
             _packetRouter.SetRoutingMode(true); // Enable routing for Connect Server packets
 
+            // Attempt to establish connection infrastructure (without starting listener yet)
+            // Connect Server connection is typically unencrypted (false).
             if (await _connectionManager.ConnectAsync(_settings.ConnectServerHost, _settings.ConnectServerPort, false, cancellationToken))
             {
                 _currentState = ClientConnectionState.ConnectedToConnectServer;
-                _connectionManager.Connection.PacketReceived += HandlePacketAsync; // Subscribe to packet received event
-                _connectionManager.Connection.Disconnected += HandleDisconnectAsync; // Subscribe to disconnected event
 
-                _logger.LogInformation("✅ Successfully connected to Connect Server. Requesting server list...");
-                _currentState = ClientConnectionState.RequestingServerList;
-                await _connectServerService.RequestServerListAsync(); // Request the server list from the Connect Server
+                // --- Verify Connection and Subscribe Handlers ---
+                var csConnection = _connectionManager.Connection; // Get the connection object
+                if (csConnection != null) // Ensure connection object is valid
+                {
+                    csConnection.PacketReceived += HandlePacketAsync; // Subscribe to packet received event
+                    csConnection.Disconnected += HandleDisconnectAsync; // Subscribe to disconnected event
+                    _logger.LogDebug("Subscribed event handlers to Connect Server connection. Connection HashCode: {HashCode}", csConnection.GetHashCode());
+
+                    // --- Explicitly Start the Receive Loop for Connect Server ---
+                    _connectionManager.StartReceiving(cancellationToken); // Use the method's token
+                    // --------------------------------------------------------
+
+                    // Now that listening has started, proceed with requesting server list
+                    _logger.LogInformation("✅ Successfully connected to Connect Server and started listener. Requesting server list...");
+                    _currentState = ClientConnectionState.RequestingServerList;
+                    // Send the request packet (no need to await here, it's fire-and-forget, response handled by event)
+                    _ = _connectServerService.RequestServerListAsync();
+                }
+                else
+                {
+                    // This shouldn't happen if ConnectAsync returned true, but handle defensively
+                    _logger.LogError("❌ ConnectionManager reported success connecting to CS, but the Connection object is null immediately after.");
+                    _currentState = ClientConnectionState.Disconnected;
+                    _cancellationTokenSource?.Cancel(); // Cancel the client operation if connection is invalid
+                }
             }
             else
             {
@@ -260,58 +283,140 @@ namespace MuOnlineConsole.Client
 
         /// <summary>
         /// Switches the client connection from the Connect Server to the Game Server.
+        /// Includes enhanced logging and checks for robustness during the transition.
+        /// Explicitly starts the receiving loop after connection infrastructure is established.
         /// </summary>
         /// <param name="host">The host address of the Game Server.</param>
         /// <param name="port">The port number of the Game Server.</param>
-        public async void SwitchToGameServer(string host, int port)
+        public async void SwitchToGameServer(string host, int port) // Using async void is acceptable here as it acts like an event handler for network packets
         {
+            // --- Initial State Check ---
             if (_currentState != ClientConnectionState.RequestingConnectionInfo)
             {
                 _logger.LogWarning("⚠️ Received game server info in unexpected state ({State}). Ignoring.", _currentState);
                 return;
             }
+            // Set state BEFORE asynchronous operations to prevent race conditions if the packet arrives again
             _currentState = ClientConnectionState.ReceivedConnectionInfo;
 
             _logger.LogInformation("🔌 Disconnecting from Connect Server...");
 
-            var oldConnection = _connectionManager.Connection;
+            // --- Safely Unsubscribe Event Handlers ---
+            var oldConnection = _connectionManager.Connection; // Capture reference before potential modification
             if (oldConnection != null)
             {
-                oldConnection.PacketReceived -= HandlePacketAsync; // Unsubscribe from packet received event of the old connection
-                oldConnection.Disconnected -= HandleDisconnectAsync; // Unsubscribe from disconnected event of the old connection
-                _logger.LogDebug("Unsubscribed event handlers from old Connect Server connection.");
-            }
-
-            await _connectionManager.DisconnectAsync(); // Disconnect from the Connect Server
-
-            _logger.LogInformation("🔌 Connecting to Game Server {Host}:{Port}...", host, port);
-            _currentState = ClientConnectionState.ConnectingToGameServer;
-            _packetRouter.SetRoutingMode(false); // Disable routing for Connect Server packets, enable for Game Server
-
-            if (await _connectionManager.ConnectAsync(host, port, true, _cancellationTokenSource?.Token ?? default))
-            {
-                _currentState = ClientConnectionState.ConnectedToGameServer;
-
-                if (_connectionManager.Connection != null)
+                try
                 {
-                    _connectionManager.Connection.PacketReceived += HandlePacketAsync; // Subscribe to packet received event for the new connection
-                    _connectionManager.Connection.Disconnected += HandleDisconnectAsync; // Subscribe to disconnected event for the new connection
-                    _logger.LogDebug("Subscribed event handlers to new Game Server connection.");
-                    _logger.LogInformation("✅ Successfully connected to Game Server. Ready to login.");
-                    // F1 00 handler in PacketRouter will trigger SendLoginRequest upon successful connection
+                    // Unsubscribe from events of the old connection to prevent leaks or unintended calls
+                    oldConnection.PacketReceived -= HandlePacketAsync;
+                    oldConnection.Disconnected -= HandleDisconnectAsync;
+                    _logger.LogDebug("Unsubscribed event handlers from old Connect Server connection.");
                 }
-                else
+                catch (Exception ex)
                 {
-                    _logger.LogError("❌ Failed to get new connection object after connecting to Game Server.");
-                    _currentState = ClientConnectionState.Disconnected;
-                    _cancellationTokenSource?.Cancel();
+                    // Log the error but attempt to continue, as the connection is being discarded anyway
+                    _logger.LogWarning(ex, "Exception during event unsubscription from old connection. Attempting to continue switch.");
                 }
             }
             else
             {
-                _logger.LogError("❌ Connection to Game Server {Host}:{Port} failed.", host, port);
-                _currentState = ClientConnectionState.Disconnected;
-                _cancellationTokenSource?.Cancel();
+                _logger.LogWarning("Old connection was null before attempting unsubscription during server switch.");
+            }
+
+            // --- Disconnect from Connect Server ---
+            try
+            {
+                // Ensure disconnection is awaited to properly release resources before connecting anew
+                await _connectionManager.DisconnectAsync();
+                // Log confirmation that the disconnect operation completed successfully
+                _logger.LogInformation("DisconnectAsync from Connect Server completed. Proceeding to connect to Game Server.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during DisconnectAsync from Connect Server. Aborting switch.");
+                _currentState = ClientConnectionState.Disconnected; // Set state to disconnected on error
+                _cancellationTokenSource?.Cancel(); // Cancel the main client loop
+                return; // Abort the switch operation
+            }
+
+            _logger.LogInformation("🔌 Connecting to Game Server {Host}:{Port}...", host, port);
+            _currentState = ClientConnectionState.ConnectingToGameServer; // Set state *before* the connection attempt
+            _packetRouter.SetRoutingMode(false); // Switch packet routing to Game Server mode
+
+            bool connectionSuccess = false;
+            try
+            {
+                // Ensure the CancellationToken is valid and not already cancelled
+                CancellationToken cancellationToken = _cancellationTokenSource?.Token ?? CancellationToken.None;
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning("Cancellation requested before attempting Game Server connection.");
+                    _currentState = ClientConnectionState.Disconnected;
+                    return; // Do not attempt connection if cancellation is pending
+                }
+
+                // --- Connect to Game Server (Infrastructure Only) ---
+                // The last argument 'true' enables encryption for the Game Server connection
+                // This call now only sets up the connection objects, doesn't start listening.
+                connectionSuccess = await _connectionManager.ConnectAsync(host, port, true, cancellationToken);
+
+                if (connectionSuccess)
+                {
+                    // Set state *after* a successful connection infrastructure setup
+                    _currentState = ClientConnectionState.ConnectedToGameServer;
+
+                    // --- Verify Connection and Subscribe Handlers ---
+                    var newConnection = _connectionManager.Connection; // Get the newly established connection object
+                    // Explicitly check if the connection object is valid immediately after ConnectAsync returns true
+                    // Note: We don't check newConnection.Connected here, as listening hasn't started yet.
+                    if (newConnection != null)
+                    {
+                        // Subscribe event handlers BEFORE starting the receive loop
+                        newConnection.PacketReceived += HandlePacketAsync;
+                        newConnection.Disconnected += HandleDisconnectAsync;
+                        _logger.LogDebug("Subscribed event handlers to new Game Server connection object. Connection HashCode: {HashCode}", newConnection.GetHashCode());
+
+                        // --- Explicitly Start the Receive Loop ---
+                        _connectionManager.StartReceiving(_cancellationTokenSource?.Token ?? CancellationToken.None);
+                        // -----------------------------------------
+
+                        // Log success AFTER attempting to start the listener
+                        _logger.LogInformation("✅ Successfully established connection infrastructure and initiated listener for Game Server. Ready to login.");
+                        // The PacketRouter's handler for the GameServerEntered packet (F1 00)
+                        // will trigger the SendLoginRequest call upon receiving the server's greeting.
+                    }
+                    else
+                    {
+                        // This case should be less likely now, but handle defensively.
+                        // It means ConnectAsync returned true, but _connectionManager.Connection is null.
+                        _logger.LogError("❌ ConnectionManager reported success connecting infrastructure, but the Connection object is null immediately after.");
+                        connectionSuccess = false; // Mark as failure
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("🚫 Game Server connection attempt was cancelled.");
+                connectionSuccess = false; // Connection failed
+            }
+            catch (Exception ex) // Catch other exceptions specifically around ConnectAsync or StartReceiving
+            {
+                _logger.LogError(ex, "💥 Exception occurred during Game Server connection setup or listener start.");
+                connectionSuccess = false; // Connection failed
+            }
+
+            // --- Handle Failed Game Server Connection ---
+            if (!connectionSuccess)
+            {
+                _logger.LogError("❌ Connection to Game Server {Host}:{Port} failed or resulted in invalid state.", host, port);
+                _currentState = ClientConnectionState.Disconnected; // Ensure state reflects the failure
+
+                // Attempt cleanup again in case the failed connection left resources dangling
+                _logger.LogWarning("Attempting cleanup after failed GS connection...");
+                // Calling DisconnectAsync again ensures CleanupCurrentConnectionAsync runs
+                await _connectionManager.DisconnectAsync();
+
+                _cancellationTokenSource?.Cancel(); // Cancel the main client operation
             }
         }
 
