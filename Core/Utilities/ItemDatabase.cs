@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq; // Required for OrderBy, ThenBy, ToList
 
-namespace MuOnlineConsole
+namespace MuOnlineConsole.Core.Utilities
 {
     /// <summary>
     /// A static class containing the item name database based on their group and ID.
@@ -10,14 +10,16 @@ namespace MuOnlineConsole
     /// </summary>
     public static class ItemDatabase
     {
-        // Main dictionary: Outer key is Group (byte), Value is an inner dictionary.
-        // Inner dictionary: Key is Number/ID (short), Value is Name (string).
-        public static readonly Dictionary<byte, Dictionary<short, string>> Items = InitializeItemData();
+        // NOTE: The actual item data initialization is omitted here for brevity,
+        // as requested. Assume the 'Items' dictionary is populated correctly
+        // based on the original provided code.
 
         /// <summary>
-        /// Initializes the item dictionary with data from the initializer files.
+        /// Main dictionary: Outer key is Group (byte), Value is an inner dictionary.
+        /// Inner dictionary: Key is Number/ID (short), Value is Name (string).
         /// </summary>
-        /// <returns>The populated item dictionary.</returns>
+        public static readonly Dictionary<byte, Dictionary<short, string>> Items = InitializeItemData();
+
         private static Dictionary<byte, Dictionary<short, string>> InitializeItemData()
         {
             var data = new Dictionary<byte, Dictionary<short, string>>();
@@ -45,7 +47,10 @@ namespace MuOnlineConsole
                 }
             }
 
-            // --- DATA EXTRACTION FROM FILES ---
+            // --- PASTE THE FULL ITEM DATA INITIALIZATION CODE HERE ---
+            // --- FROM THE ORIGINAL PROVIDED FILE ---
+            // Example: AddItem(6, 0, "Small Shield"); ... etc ...
+
 
             // --- Armors.cs ---
             // Shields (Group 6)
@@ -705,7 +710,7 @@ namespace MuOnlineConsole
             AddItem(4, 22, "Albatross Bow");
             AddItem(4, 23, "Stinger Bow");
             AddItem(4, 24, "Air Lyn Bow");
-            
+
             // Group 5: Staffs / Sticks / Books
             AddItem(5, 0, "Skull Staff");
             AddItem(5, 1, "Angelic Staff");
@@ -760,7 +765,8 @@ namespace MuOnlineConsole
             AddItem(12, 43, "Wing of Dimension");
             AddItem(12, 50, "Cape of Overrule");
 
-            // Return the populated dictionary
+            // --- END OF PASTED DATA ---
+
             return data;
         }
 
@@ -784,70 +790,35 @@ namespace MuOnlineConsole
 
         /// <summary>
         /// Gets the item name based on its ItemData (ReadOnlySpan<byte>).
-        /// Assumes the standard OpenMU format (ID at byte 0, Group in the upper 4 bits of byte 5).
+        /// Assumes a standard OpenMU format where ID and Group can be extracted.
+        /// Adjust indices based on actual packet structure for different versions if needed.
         /// </summary>
         /// <param name="itemData">The item data.</param>
         /// <returns>The item name, or null if not found or data is invalid.</returns>
         public static string? GetItemName(ReadOnlySpan<byte> itemData)
         {
-            if (itemData.Length < 6) // Need at least bytes 0 and 5
+            // Basic validation: Need at least ID (byte 0) and Group (byte 5)
+            if (itemData.Length < 6)
             {
-                Console.WriteLine($"[GetItemName] Error: ItemData too short ({itemData.Length} bytes), at least 6 required.");
-                return null; // Too little data
+                // Log or handle error: ItemData too short
+                // Console.WriteLine($"[GetItemName] Error: ItemData too short ({itemData.Length} bytes), at least 6 required.");
+                return null;
             }
 
-            short id = itemData[0];
-            byte groupAndHarmonyByte = itemData[5];
-            byte group = (byte)(groupAndHarmonyByte >> 4); // Extract the group from the upper 4 bits
-
-            return GetItemName(group, id);
-        }
-    }
-
-    // --- EXAMPLE USAGE ---
-    // Uncomment to test
-    /*
-    public class ExampleItemLookup
-    {
-        public static void Main() // Example usage method
-        {
-            // Example 1: Lookup by group and ID
-            byte group = 0;
-            short id = 5;
-            string? name1 = ItemDatabase.GetItemName(group, id);
-            Console.WriteLine($"Item (Group: {group}, ID: {id}): {name1 ?? "Not found"}"); // Should output "Blade"
-
-            // Example 2: Lookup from sample ItemData
-            // Let's assume this is data for Kris (ID 0, Group 0) with some options
-            // Byte 0: ID = 0
-            // Byte 1-4: Options/Durability
-            // Byte 5: Group = 0 (in upper 4 bits), rest 0 => 0b0000_0000 = 0
-            byte[] krisData = { 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-            string? name2 = ItemDatabase.GetItemName(krisData);
-            Console.WriteLine($"Item ({BitConverter.ToString(krisData)}): {name2 ?? "Not found"}"); // Should output "Kris"
-
-            // Example 3: Lookup for Jewel of Soul (ID 14, Group 14)
-            // Byte 0: ID = 14
-            // Byte 1-4: Options/Durability (for jewels usually 0 or 1)
-            // Byte 5: Group = 14 (0b1110) in upper 4 bits => 0b1110_0000 = 224 (0xE0)
-            byte[] soulData = { 14, 0, 1, 0, 0, 224, 0, 0, 0, 0, 0, 0 };
-            string? name3 = ItemDatabase.GetItemName(soulData);
-            Console.WriteLine($"Item ({BitConverter.ToString(soulData)}): {name3 ?? "Not found"}"); // Should output "Jewel of Soul"
-
-            // Example 4: Non-existent item
-            string? name4 = ItemDatabase.GetItemName(99, 123);
-            Console.WriteLine($"Item (Group: 99, ID: 123): {name4 ?? "Not found"}");
-
-            // Example 5: Displaying all items from group 5 (Staffs/Sticks)
-            if (ItemDatabase.Items.TryGetValue(5, out var group5Items))
+            try
             {
-                Console.WriteLine("\nItems from Group 5:");
-                foreach (var kvp in group5Items.OrderBy(i => i.Key))
-                {
-                    Console.WriteLine($"  ID: {kvp.Key}, Name: {kvp.Value}");
-                }
+                short id = itemData[0]; // Item ID is usually at the first byte
+                byte groupAndHarmonyByte = itemData[5]; // Group info often in byte 5
+                byte group = (byte)(groupAndHarmonyByte >> 4); // Extract group from upper 4 bits
+
+                return GetItemName(group, id);
+            }
+            catch (IndexOutOfRangeException)
+            {
+                // Handle cases where itemData might be shorter than expected despite initial check
+                // Console.WriteLine($"[GetItemName] Error: Index out of range accessing ItemData (Length: {itemData.Length}).");
+                return null;
             }
         }
     }
-    */
 }

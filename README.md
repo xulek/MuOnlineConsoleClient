@@ -63,8 +63,6 @@ MuOnlineConsole/
 └── README.md
 ```
 
-![Screenshot](https://i.ibb.co/vvcp7W5w/diagram-2.png)
-
 ## Requirements
 
 * **.NET 9 SDK** (or newer)
@@ -85,11 +83,12 @@ MuOnlineConsole/
 4. Ensure `appsettings.json` is set to **Copy if newer** in build properties, or add this to your `.csproj`:
 
    ```xml
-   <ItemGroup>
-     <None Update="appsettings.json">
-       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-     </None>
-   </ItemGroup>
+    <ItemGroup>
+      <None Update="Configuration\appsettings.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Link>appsettings.json</Link>
+      </None>
+    </ItemGroup>
    ```
 
 5. Restore dependencies, build, and run the project:

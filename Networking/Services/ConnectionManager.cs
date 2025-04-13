@@ -5,28 +5,43 @@ using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network;
 using MUnique.OpenMU.Network.SimpleModulus;
 using MUnique.OpenMU.Network.Xor;
-using Pipelines.Sockets.Unofficial;
+using Pipelines.Sockets.Unofficial; // Requires the Pipelines.Sockets.Unofficial NuGet package
 
-namespace MuOnlineConsole
+namespace MuOnlineConsole.Networking
 {
     /// <summary>
-    /// Manages network connection and encryption/decryption pipeline.
-    /// Allows connecting to different endpoints sequentially.
+    /// Manages TCP network connections, including establishing, maintaining, and disconnecting connections.
+    /// Handles encryption and decryption pipelines using SimpleModulus and Xor32 algorithms.
+    /// Supports sequential connections to different endpoints (e.g., Connect Server then Game Server).
+    /// Implements IAsyncDisposable for proper resource management.
     /// </summary>
     public class ConnectionManager : IAsyncDisposable
     {
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<ConnectionManager> _logger;
-        private readonly SimpleModulusKeys _encryptKeys;
-        private readonly SimpleModulusKeys _decryptKeys;
+        private readonly SimpleModulusKeys _encryptKeys; // Encryption keys for SimpleModulus
+        private readonly SimpleModulusKeys _decryptKeys; // Decryption keys for SimpleModulus
 
-        private IDuplexPipe? _socketPipe;
-        private IConnection? _connection;
-        private CancellationTokenSource? _receiveCts;
+        private SocketConnection? _socketConnection; // Underlying socket connection, using concrete type for disposal
+        private IConnection? _connection; // Abstraction for network connection, can be encrypted or raw
+        private CancellationTokenSource? _receiveCts; // Cancellation token source for controlling receive loop
 
+        /// <summary>
+        /// Gets the current network connection. Throws an exception if the connection is not initialized or has been disconnected.
+        /// </summary>
         public IConnection Connection => _connection ?? throw new InvalidOperationException("Connection has not been initialized or is disconnected.");
+
+        /// <summary>
+        /// Gets a value indicating whether the current network connection is established and active.
+        /// </summary>
         public bool IsConnected => _connection?.Connected ?? false;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ConnectionManager"/> class.
+        /// </summary>
+        /// <param name="loggerFactory">The logger factory used to create loggers.</param>
+        /// <param name="encryptKeys">The SimpleModulus keys for encryption.</param>
+        /// <param name="decryptKeys">The SimpleModulus keys for decryption.</param>
         public ConnectionManager(ILoggerFactory loggerFactory, SimpleModulusKeys encryptKeys, SimpleModulusKeys decryptKeys)
         {
             _loggerFactory = loggerFactory;
@@ -36,85 +51,91 @@ namespace MuOnlineConsole
         }
 
         /// <summary>
-        /// Connects to the specified host and port.
+        /// Establishes a TCP connection to the specified host and port.
+        /// Configures the packet processing pipeline, including optional encryption based on the 'useEncryption' parameter.
         /// </summary>
-        /// <param name="host">The host to connect to.</param>
-        /// <param name="port">The port to connect to.</param>
-        /// <param name="useEncryption">Whether to use the encryption pipeline.</param>
-        /// <param name="cancellationToken">Cancellation token for the connection attempt.</param>
-        /// <returns>True if connection was successful, otherwise false.</returns>
+        /// <param name="host">The host name or IP address of the server.</param>
+        /// <param name="port">The port number of the server.</param>
+        /// <param name="useEncryption">True to enable encryption (SimpleModulus and Xor32), false for a raw, unencrypted connection.</param>
+        /// <param name="cancellationToken">A cancellation token that can be used to cancel the connection attempt.</param>
+        /// <returns>True if the connection was successfully established; otherwise, false.</returns>
         public async Task<bool> ConnectAsync(string host, int port, bool useEncryption, CancellationToken cancellationToken = default)
         {
             if (IsConnected)
             {
                 _logger.LogWarning("🔌 Already connected. Disconnect first before connecting to a new endpoint.");
-                return false; // Or should we disconnect and reconnect? Let's enforce explicit disconnect for now.
+                return false; // Do not attempt to connect if already connected
             }
 
-            _logger.LogInformation("🔌 Connecting to {Host}:{Port} (Encryption: {UseEncryption})...", host, port, useEncryption);
+            _logger.LogInformation("🔌 Attempting connection to {Host}:{Port} (Encryption: {UseEncryption})...", host, port, useEncryption);
             try
             {
+                // Resolve host name to IP addresses and select the first IPv4 address
                 var ipAddress = (await Dns.GetHostAddressesAsync(host, cancellationToken))
-                    .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+                    .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork); // Prefer IPv4 for compatibility
                 if (ipAddress == null)
                 {
                     _logger.LogError("❓ Failed to resolve IPv4 address for host: {Host}", host);
-                    return false;
+                    return false; // Abort if IPv4 address cannot be resolved
                 }
-                var endPoint = new IPEndPoint(ipAddress, port);
+                var endPoint = new IPEndPoint(ipAddress, port); // Create endpoint from IP address and port
 
-                // Ensure previous resources are cleaned up if any (shouldn't happen if IsConnected is checked, but belt and suspenders)
-                await CleanupCurrentConnectionAsync();
+                await CleanupCurrentConnectionAsync(); // Ensure any previous connection is properly cleaned up
 
-                _socketPipe = await SocketConnection.ConnectAsync(endPoint, null); // Pass null for options
+                _socketConnection = await SocketConnection.ConnectAsync(endPoint); // Establish socket connection
                 _logger.LogInformation("✔️ Socket connected to {EndPoint}.", endPoint);
 
-                var connectionLogger = _loggerFactory.CreateLogger<Connection>();
+                var connectionLogger = _loggerFactory.CreateLogger<Connection>(); // Create logger for the connection class
 
+                IDuplexPipe transportPipe = _socketConnection; // Start with raw socket pipe
+
+                // Setup encryption pipeline if useEncryption is true
                 if (useEncryption)
                 {
-                    // Set up encryption/decryption pipeline
-                    var decryptor = new PipelinedSimpleModulusDecryptor(_socketPipe.Input, _decryptKeys);
-                    var simpleModulusEncryptor = new PipelinedSimpleModulusEncryptor(_socketPipe.Output, _encryptKeys);
+                    // Build decryption pipeline: Socket -> SimpleModulus Decryptor
+                    var decryptor = new PipelinedSimpleModulusDecryptor(transportPipe.Input, _decryptKeys);
+                    // Build encryption pipeline: Socket <- Xor32 Encryptor <- SimpleModulus Encryptor
+                    var simpleModulusEncryptor = new PipelinedSimpleModulusEncryptor(transportPipe.Output, _encryptKeys);
                     var xor32Encryptor = new PipelinedXor32Encryptor(simpleModulusEncryptor.Writer);
-                    _connection = new Connection(_socketPipe, decryptor, xor32Encryptor, connectionLogger);
+                    _connection = new Connection(transportPipe, decryptor, xor32Encryptor, connectionLogger); // Create encrypted connection
                     _logger.LogInformation("🔒 Encryption pipeline established.");
                 }
                 else
                 {
-                    // *** Pass null for decryptor/encryptor for unencrypted connection ***
-                    _connection = new Connection(_socketPipe, null, null, connectionLogger);
+                    // Use raw transport pipe for unencrypted connection
+                    _connection = new Connection(transportPipe, null, null, connectionLogger);
                     _logger.LogInformation("🔓 Raw (unencrypted) pipeline established.");
                 }
 
-                _receiveCts = new CancellationTokenSource();
-                _ = _connection.BeginReceiveAsync(); // Start background receiving
+                _receiveCts = new CancellationTokenSource(); // Initialize cancellation token source for receive loop
+                _ = _connection.BeginReceiveAsync(); // Start asynchronous receive loop in background
                 _logger.LogInformation("👂 Started listening for packets on new connection.");
-                return true;
+                return true; // Connection successful
             }
             catch (SocketException ex)
             {
                 _logger.LogError(ex, "❌ Socket error during connection to {Host}:{Port}: {ErrorCode}", host, port, ex.SocketErrorCode);
-                await CleanupCurrentConnectionAsync();
-                return false;
+                await CleanupCurrentConnectionAsync(); // Cleanup resources on connection failure
+                return false; // Connection failed due to socket error
             }
             catch (OperationCanceledException)
             {
                 _logger.LogWarning("🚫 Connection attempt to {Host}:{Port} cancelled.", host, port);
-                await CleanupCurrentConnectionAsync();
-                return false;
+                await CleanupCurrentConnectionAsync(); // Cleanup resources on cancellation
+                return false; // Connection cancelled
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "💥 Unexpected error while connecting to {Host}:{Port}.", host, port);
-                await CleanupCurrentConnectionAsync();
-                return false;
+                await CleanupCurrentConnectionAsync(); // Cleanup resources on unexpected error
+                return false; // Connection failed due to unexpected error
             }
         }
 
         /// <summary>
-        /// Disconnects the current connection.
+        /// Gracefully disconnects the current network connection.
         /// </summary>
+        /// <returns>A Task representing the asynchronous disconnect operation.</returns>
         public async Task DisconnectAsync()
         {
             if (_connection != null && _connection.Connected)
@@ -122,7 +143,7 @@ namespace MuOnlineConsole
                 _logger.LogInformation("🔌 Disconnecting current connection...");
                 try
                 {
-                    await _connection.DisconnectAsync();
+                    await _connection.DisconnectAsync(); // Initiate disconnect sequence
                     _logger.LogInformation("✔️ Connection disconnected.");
                 }
                 catch (Exception ex)
@@ -134,109 +155,56 @@ namespace MuOnlineConsole
             {
                 _logger.LogInformation("🔌 No active connection to disconnect.");
             }
-            // Always cleanup resources after attempting disconnect
-            await CleanupCurrentConnectionAsync();
+            await CleanupCurrentConnectionAsync(); // Ensure resources are cleaned up after disconnection
         }
 
         /// <summary>
-        /// Cleans up resources related to the current connection.
+        /// Cleans up resources associated with the current connection, including socket, connection object, and cancellation tokens.
         /// </summary>
         private async Task CleanupCurrentConnectionAsync()
         {
-            var currentCts = _receiveCts; // Capture the current CTS
-            currentCts?.Cancel(); // Signal receiver loop to stop
+            _receiveCts?.Cancel(); // Request cancellation of receive loop
 
-            // Give the receive loop a moment to process the cancellation before disposing resources.
-            // This is a workaround for potential race conditions if DisconnectAsync/DisposeAsync
-            // don't fully guarantee the receive loop has exited.
-            if (currentCts != null)
+            // Dispose of IConnection, which should handle pipe completion and disposal
+            if (_connection is IAsyncDisposable asyncDisposableConnection)
+            {
+                try { await asyncDisposableConnection.DisposeAsync(); } catch (ObjectDisposedException) { /* Expected if already disposed */ } catch (Exception ex) { _logger.LogError(ex, "Error during IAsyncDisposable connection cleanup."); }
+            }
+            else if (_connection is IDisposable disposableConnection)
+            {
+                try { disposableConnection.Dispose(); } catch (ObjectDisposedException) { /* Expected if already disposed */ } catch (Exception ex) { _logger.LogError(ex, "Error during IDisposable connection cleanup."); }
+            }
+            _connection = null; // Dereference connection object
+
+            // Dispose of SocketConnection to release socket resources
+            if (_socketConnection != null)
             {
                 try
                 {
-                    // A short delay (e.g., 100ms). Adjust if necessary, but keep it minimal.
-                    await Task.Delay(100, CancellationToken.None); // Use CancellationToken.None to avoid cancelling the delay itself
+                    _socketConnection.Dispose(); // Dispose of socket connection
                 }
-                catch (TaskCanceledException)
-                {
-                    // This might happen if the application is shutting down rapidly, ignore.
-                    _logger.LogDebug("Cleanup delay was cancelled.");
-                }
-                catch (ObjectDisposedException)
-                {
-                    // CTS might already be disposed if DisconnectAsync was called multiple times rapidly.
-                    _logger.LogDebug("Cleanup delay CTS was already disposed.");
-                }
+                catch (ObjectDisposedException) { /* Expected if already disposed */ }
+                catch (Exception ex) { _logger.LogError(ex, "Error during SocketConnection cleanup."); }
+                _socketConnection = null; // Dereference socket connection
             }
 
-            var connectionToDispose = _connection;
-            _connection = null; // Nullify immediately to prevent reuse attempts
+            // Dispose of CancellationTokenSource to release resources
+            try { _receiveCts?.Dispose(); } catch (ObjectDisposedException) { /* Expected if already disposed */ }
+            _receiveCts = null; // Dereference cancellation token source
 
-            if (connectionToDispose != null)
-            {
-                // Ensure disconnect was called, even if already marked as not connected.
-                // DisconnectAsync should ideally be idempotent or handle multiple calls gracefully.
-                _logger.LogDebug("Ensuring connection is disposed during cleanup.");
-                try
-                {
-                    // Disconnect again might be redundant if already called, but safer.
-                    // It should also handle the pipe closing.
-                    await connectionToDispose.DisconnectAsync();
-                }
-                catch (ObjectDisposedException) { /* Already disposed, expected */ }
-                catch (Exception ex) { _logger.LogError(ex, "Error during connection cleanup disconnect/dispose."); }
-
-                // Explicitly dispose if IAsyncDisposable/IDisposable
-                if (connectionToDispose is IAsyncDisposable asyncDisposableConnection)
-                {
-                    try { await asyncDisposableConnection.DisposeAsync(); } catch (Exception ex) { _logger.LogError(ex, "Error during IAsyncDisposable connection cleanup."); }
-                }
-                else if (connectionToDispose is IDisposable disposableConnection)
-                {
-                    try { disposableConnection.Dispose(); } catch (Exception ex) { _logger.LogError(ex, "Error during IDisposable connection cleanup."); }
-                }
-            }
-
-            // Explicitly dispose the pipe if it wasn't disposed by the connection.
-            // This might be needed depending on the Connection implementation details.
-            var pipeToDispose = _socketPipe;
-            _socketPipe = null; // Nullify immediately
-            if (pipeToDispose != null)
-            {
-                _logger.LogDebug("Disposing socket pipe during cleanup.");
-                if (pipeToDispose is IAsyncDisposable asyncPipe)
-                {
-                    try { await asyncPipe.DisposeAsync(); } catch (Exception ex) { _logger.LogError(ex, "Error during IAsyncDisposable pipe cleanup."); }
-                }
-                else if (pipeToDispose is IDisposable syncPipe)
-                {
-                    try { syncPipe.Dispose(); } catch (Exception ex) { _logger.LogError(ex, "Error during IDisposable pipe cleanup."); }
-                }
-            }
-
-
-            // Dispose the CancellationTokenSource
-            try
-            {
-                currentCts?.Dispose();
-            }
-            catch (ObjectDisposedException) { /* Already disposed, expected */ }
-            if (_receiveCts == currentCts) // Only nullify if it hasn't been replaced by a new connection attempt already
-            {
-                _receiveCts = null;
-            }
+            _logger.LogDebug("Connection resources cleaned up.");
         }
 
-
         /// <summary>
-        /// Disposes the ConnectionManager and cleans up any active connection.
+        /// Asynchronously disposes of the ConnectionManager, ensuring all resources are released.
         /// </summary>
+        /// <returns>A ValueTask representing the completion of the disposal.</returns>
         public async ValueTask DisposeAsync()
         {
             _logger.LogInformation("🧹 Cleaning up ConnectionManager...");
-            await DisconnectAsync(); // Ensure disconnection and resource cleanup
+            await DisconnectAsync(); // Disconnect and cleanup active connection
             _logger.LogInformation("✔️ ConnectionManager cleaned up.");
-            // No other managed resources specific to ConnectionManager itself to dispose here
-            // LoggerFactory is managed externally.
+            GC.SuppressFinalize(this); // Suppress finalization to prevent GC from calling finalizer after DisposeAsync
         }
     }
 }

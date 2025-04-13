@@ -1,17 +1,23 @@
 using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network;
-using MUnique.OpenMU.Network.Packets.ConnectServer; // Assuming CS packets are here
+using MuOnlineConsole.Networking.PacketHandling; // For PacketBuilder
 
-namespace MuOnlineConsole
+namespace MuOnlineConsole.Networking.Services
 {
     /// <summary>
-    /// Handles communication with the Connect Server.
+    ///  Service class responsible for handling communication specifically with the Connect Server.
+    ///  Provides methods for requesting server lists and connection information for game servers.
     /// </summary>
     public class ConnectServerService
     {
-        private readonly ConnectionManager _connectionManager;
-        private readonly ILogger<ConnectServerService> _logger;
+        private readonly ConnectionManager _connectionManager; // Manages the network connection to the Connect Server
+        private readonly ILogger<ConnectServerService> _logger; // Logger for this service
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ConnectServerService"/> class.
+        /// </summary>
+        /// <param name="connectionManager">The connection manager instance to use for sending packets to the Connect Server.</param>
+        /// <param name="logger">The logger instance for logging service operations and errors.</param>
         public ConnectServerService(ConnectionManager connectionManager, ILogger<ConnectServerService> logger)
         {
             _connectionManager = connectionManager;
@@ -19,20 +25,21 @@ namespace MuOnlineConsole
         }
 
         /// <summary>
-        /// Sends a request for the server list to the Connect Server.
+        /// Sends a request to the Connect Server to get the list of available game servers.
         /// </summary>
+        /// <returns>A Task representing the asynchronous operation.</returns>
         public async Task RequestServerListAsync()
         {
             if (!_connectionManager.IsConnected)
             {
                 _logger.LogError("🔒 No connection to Connect Server – cannot request server list.");
-                return;
+                return; // Exit if not connected to Connect Server
             }
 
             _logger.LogInformation("📜 Sending ServerListRequest packet...");
             try
             {
-                // Use the appropriate packet builder method
+                // Use PacketBuilder to create and send the ServerListRequest packet
                 await _connectionManager.Connection.SendAsync(() =>
                     PacketBuilder.BuildServerListRequestPacket(_connectionManager.Connection.Output)
                 );
@@ -45,21 +52,23 @@ namespace MuOnlineConsole
         }
 
         /// <summary>
-        /// Sends a request for connection information for a specific game server.
+        /// Sends a request to the Connect Server to get connection information for a specific game server.
+        /// This information typically includes the IP address and port of the game server.
         /// </summary>
-        /// <param name="serverId">The ID of the game server.</param>
+        /// <param name="serverId">The ID of the game server for which to request connection information.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
         public async Task RequestConnectionInfoAsync(ushort serverId)
         {
             if (!_connectionManager.IsConnected)
             {
                 _logger.LogError("🔒 No connection to Connect Server – cannot request connection info.");
-                return;
+                return; // Exit if not connected to Connect Server
             }
 
             _logger.LogInformation("ℹ️ Requesting connection info for Server ID {ServerId}...", serverId);
             try
             {
-                // Use the appropriate packet builder method
+                // Use PacketBuilder to create and send the ConnectionInfoRequest packet
                 await _connectionManager.Connection.SendAsync(() =>
                     PacketBuilder.BuildServerInfoRequestPacket(_connectionManager.Connection.Output, serverId)
                 );

@@ -1,106 +1,87 @@
 using MUnique.OpenMU.Network.Packets.ConnectServer;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
 
-namespace MuOnlineConsole
+namespace MuOnlineConsole.Core.Utilities
 {
     /// <summary>
-    /// Holds Game Server packet codes which are known to have sub-codes.
+    ///  Static class holding a set of Game Server packet codes that are known to utilize sub-codes.
+    ///  This is crucial for the PacketRouter to correctly identify packet handlers, as packets with sub-codes require both main and sub-code for routing.
     /// </summary>
     public static class SubCodeHolder
     {
-        // Based on ServerToClientPackets.cs from MUnique.OpenMU.Network
+        /// <summary>
+        ///  HashSet containing the main codes of Game Server packets that have sub-codes.
+        ///  Initialized with codes from ServerToClientPackets.cs in MUnique.OpenMU.Network and additional codes identified to use sub-codes.
+        /// </summary>
         private static readonly HashSet<byte> CodesWithSubCode = new HashSet<byte>
         {
-            LoginResponse.Code, // F1
-            CharacterList.Code, // F3
-            NpcItemBuyFailed.Code, // 32 - Note: ItemBought uses 32 without subcode
-            TradeMoneySetResponse.Code, // 3A
-            PlayerShopSetItemPriceResponse.Code, // 3F
-            CurrentHealthAndShield.Code, // 26
-            CurrentManaAndAbility.Code, // 27
-            LegacyQuestMonsterKillInfo.Code, // A4
-            DuelStartResult.Code, // AA
-            ChaosCastleEnterResult.Code, // AF
-            IllusionTempleEnterResult.Code, // BF
-            QuestEventResponse.Code, // F6
-            OpenNpcDialog.Code, // F9
-            CharacterClassCreationUnlock.Code, // DE
-            MasterCharacterLevelUpdate.Code, // F3
-            MasterSkillLevelUpdate.Code, // F3
-            MasterSkillList.Code, // F3
-            MapChanged.Code, // 1C
-            // Add any other codes from ServerToClientPackets.cs which have a SubCode field
+            LoginResponse.Code, // F1 - Login response packet
+            CharacterList.Code, // F3 - Character list packet
+            NpcItemBuyFailed.Code, // 32 - NPC item buy failed response (Note: ItemBought uses 32 without subcode)
+            TradeMoneySetResponse.Code, // 3A - Trade money set response packet
+            PlayerShopSetItemPriceResponse.Code, // 3F - Player shop set item price response packet
+            CurrentHealthAndShield.Code, // 26 - Current health and shield status packet
+            CurrentManaAndAbility.Code, // 27 - Current mana and ability status packet
+            LegacyQuestMonsterKillInfo.Code, // A4 - Legacy quest monster kill information packet
+            DuelStartResult.Code, // AA - Duel start result packet
+            ChaosCastleEnterResult.Code, // AF - Chaos Castle enter result packet
+            IllusionTempleEnterResult.Code, // BF - Illusion Temple enter result packet
+            QuestEventResponse.Code, // F6 - Quest event response packet
+            OpenNpcDialog.Code, // F9 - Open NPC dialog packet
+            CharacterClassCreationUnlock.Code, // DE - Character class creation unlock packet
+            MasterCharacterLevelUpdate.Code, // F3 - Master character level update packet
+            MasterSkillLevelUpdate.Code, // F3 - Master skill level update packet
+            MasterSkillList.Code, // F3 - Master skill list packet
+            MapChanged.Code, // 1C - Map changed packet
+            // Additional codes from ServerToClientPackets.cs and other identified packets with subcodes:
+            0xC1, // Friend Add/Delete Response etc. - Friend list and friend actions response packets
+            0xC8, // Letter Delete Response - In-game letter delete response packet
+            0xCA, // Chat Room Invite Response - Chat room invitation response packet
+            0xCB, // Friend Invite Result - Friend invitation result packet
+            0xD0, // Special NPC Action Results - Results from special NPC actions (e.g., crafting)
+            0xD1, // Kanturu/Raklion Info/Enter - Kanturu and Raklion event information and entry packets
+            0xD2, // Cash Shop Point/Open/Buy/Gift/List/Delete/Consume - Cash shop related packets
+            0xE1, // Guild Role Assign Response - Guild role assignment response packet
+            0xE2, // Guild Type Change Response - Guild type change response packet
+            0xE5, // Guild Relationship Request Response - Guild relationship request response packet
+            0xE6, // Guild Relationship Change Response - Guild relationship change response packet
+            0xEB, // Alliance Kick Response - Guild alliance kick response packet
+            0xF7, // Empire Guardian Enter Response - Empire Guardian event enter response
+            0xF8, // Gens Join/Leave/Reward/Ranking Response - Gens system related responses
+            0xBD, // Crywolf Info/Contract/Benefit - Crywolf Fortress event information and status packets
         };
 
-        // Explicitly add codes if they are not covered by the above structs
-        static SubCodeHolder()
-        {
-            // Redundant if structs cover them, but safe to keep
-            CodesWithSubCode.Add(0xF1); // Login/Logout
-            CodesWithSubCode.Add(0xF3); // Character List/Info/Level/Stat/Skill/Master
-            CodesWithSubCode.Add(0x32); // Buy Item Result (Failed uses FF)
-            CodesWithSubCode.Add(0x3A); // Trade Money Set Response
-            CodesWithSubCode.Add(0x3F); // Player Shop Price Set Result / Item List / Close / Sold / Buy Result
-            CodesWithSubCode.Add(0x26); // Health/Shield Update
-            CodesWithSubCode.Add(0x27); // Mana/Ability Update
-            CodesWithSubCode.Add(0xA3); // Legacy Quest Reward (Not in provided structs, assuming it might have subcodes)
-            CodesWithSubCode.Add(0xA4); // Legacy Quest Monster Kill Info
-            CodesWithSubCode.Add(0xAA); // Duel Start/End/Score/Health/Init/Spectator
-            CodesWithSubCode.Add(0xAF); // Chaos Castle Enter Result / Position Set
-            CodesWithSubCode.Add(0xB2); // Castle Siege Register/Unregister/State/Mark/Defense/Tax
-            CodesWithSubCode.Add(0xB3); // Castle Siege Gate/Statue List
-            CodesWithSubCode.Add(0xB7); // Castle Siege Catapult/Weapon
-            CodesWithSubCode.Add(0xB9); // Castle Siege Owner Logo/Hunting Zone
-            CodesWithSubCode.Add(0xBC); // Lahap Mix Request (Server doesn't send this code)
-            CodesWithSubCode.Add(0xBD); // Crywolf Info/Contract/Benefit
-            CodesWithSubCode.Add(0xBF); // Illusion Temple Enter/State/Skill/Result/Reward / Lucky Coin / Doppelganger
-            CodesWithSubCode.Add(0xC1); // Friend Add/Delete Response
-            CodesWithSubCode.Add(0xC3); // Friend Request Response (Not in provided structs)
-            CodesWithSubCode.Add(0xC8); // Letter Delete Response (Not in provided structs)
-            CodesWithSubCode.Add(0xCA); // Chat Room Invite Response (Not in provided structs)
-            CodesWithSubCode.Add(0xCB); // Friend Invite Result
-            CodesWithSubCode.Add(0xD0); // Special NPC Action Results
-            CodesWithSubCode.Add(0xD1); // Kanturu/Raklion Info/Enter
-            CodesWithSubCode.Add(0xD2); // Cash Shop Point/Open/Buy/Gift/List/Delete/Consume
-            CodesWithSubCode.Add(0xE1); // Guild Role Assign Response
-            CodesWithSubCode.Add(0xE2); // Guild Type Change Response
-            CodesWithSubCode.Add(0xE5); // Guild Relationship Request Response
-            CodesWithSubCode.Add(0xE6); // Guild Relationship Change Response
-            CodesWithSubCode.Add(0xEB); // Alliance Kick Response
-            CodesWithSubCode.Add(0xF6); // Quest System (Various subcodes)
-            CodesWithSubCode.Add(0xF7); // Empire Guardian Enter Response
-            CodesWithSubCode.Add(0xF8); // Gens Join/Leave/Reward/Ranking Response
-            CodesWithSubCode.Add(0xF9); // Open NPC Dialog
-            CodesWithSubCode.Add(0xDE); // Character Class Unlock
-            CodesWithSubCode.Add(0x1C); // Map Changed
-        }
-
+        /// <summary>
+        ///  Checks if a given Game Server packet code is known to have a sub-code.
+        /// </summary>
+        /// <param name="code">The main packet code to check.</param>
+        /// <returns><c>true</c> if the packet code is in the list of codes with sub-codes; otherwise, <c>false</c>.</returns>
         public static bool ContainsSubCode(byte code) => CodesWithSubCode.Contains(code);
     }
 
     /// <summary>
-    /// Holds Connect Server packet codes which are known to have sub-codes.
+    ///  Static class holding a set of Connect Server packet codes that are known to utilize sub-codes.
+    ///  Similar to <see cref="SubCodeHolder"/> but specifically for Connect Server packets.
     /// </summary>
     public static class ConnectServerSubCodeHolder
     {
-        // Based on ConnectServerPackets.cs from MUnique.OpenMU.Network
+        /// <summary>
+        ///  HashSet containing the main codes of Connect Server packets that have sub-codes.
+        ///  Initialized with codes from ConnectServerPackets.cs in MUnique.OpenMU.Network.
+        /// </summary>
         private static readonly HashSet<byte> CodesWithSubCode = new HashSet<byte>
         {
-            Hello.Code, // 0x00
-            ConnectionInfoRequest.Code, // 0xF4
-            ServerListRequest.Code, // 0xF4
-            ClientNeedsPatch.Code, // 0x05
-            // Add any other codes from ConnectServerPackets.cs which have a SubCode field
+            Hello.Code, // 0x00 - Hello packet, initial handshake
+            ConnectionInfoRequest.Code, // 0xF4 - Connection info request/response packet (Request uses 0x03, Response uses 0x03)
+            ServerListRequest.Code, // 0xF4 - Server list request/response packet (Request uses 0x06, Response uses 0x06)
+            ClientNeedsPatch.Code, // 0x05 - Client patch requirement notification packet
         };
 
-        static ConnectServerSubCodeHolder()
-        {
-            // Explicitly add codes if they are not covered by the above structs
-            CodesWithSubCode.Add(0x00); // Hello
-            CodesWithSubCode.Add(0xF4); // Server List / Connection Info
-            CodesWithSubCode.Add(0x05); // Client Needs Patch
-        }
-
+        /// <summary>
+        ///  Checks if a given Connect Server packet code is known to have a sub-code.
+        /// </summary>
+        /// <param name="code">The main packet code to check.</param>
+        /// <returns><c>true</c> if the packet code is in the list of Connect Server codes with sub-codes; otherwise, <c>false</c>.</returns>
         public static bool ContainsSubCode(byte code) => CodesWithSubCode.Contains(code);
     }
 }

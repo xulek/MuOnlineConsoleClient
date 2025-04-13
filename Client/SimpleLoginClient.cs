@@ -1,17 +1,21 @@
-using System.Buffers; // Required for ReadOnlySequence<byte>
-using System.Collections.Concurrent;
+using System.Buffers;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network.Packets;
 using MUnique.OpenMU.Network.Packets.ClientToServer;
-using MUnique.OpenMU.Network.Packets.ServerToClient;
 using MUnique.OpenMU.Network.SimpleModulus;
 using MUnique.OpenMU.Network.Xor;
+using MuOnlineConsole.Configuration;
+using MuOnlineConsole.Core.Models;
+using MuOnlineConsole.Core.Utilities;
+using MuOnlineConsole.Networking;
+using MuOnlineConsole.Networking.PacketHandling;
+using MuOnlineConsole.Networking.Services;
 
-namespace MuOnlineConsole
+namespace MuOnlineConsole.Client
 {
     /// <summary>
-    /// Enum representing protocol versions for compatibility handling.
+    /// Enumeration representing different protocol versions for client compatibility.
     /// </summary>
     public enum TargetProtocolVersion
     {
@@ -21,33 +25,43 @@ namespace MuOnlineConsole
     }
 
     /// <summary>
-    /// Represents the connection state of the client.
+    /// Enumeration defining the connection states of the client.
     /// </summary>
     public enum ClientConnectionState
     {
-        Initial,
-        ConnectingToConnectServer,
-        ConnectedToConnectServer,
-        RequestingServerList,
-        ReceivedServerList,
-        SelectingServer,
-        RequestingConnectionInfo,
-        ReceivedConnectionInfo,
-        ConnectingToGameServer,
-        ConnectedToGameServer, // Ready to send login
-        Authenticating,
-        SelectingCharacter,
-        InGame,
-        Disconnected
+        Initial, // Initial state before any connection attempt
+        ConnectingToConnectServer, // Attempting to connect to the Connect Server
+        ConnectedToConnectServer, // Successfully connected to the Connect Server
+        RequestingServerList, // Requesting the list of game servers from the Connect Server
+        ReceivedServerList, // Received the list of game servers
+        SelectingServer, // User is in the process of selecting a game server
+        RequestingConnectionInfo, // Requesting connection information for the selected game server
+        ReceivedConnectionInfo, // Received connection information for the game server
+        ConnectingToGameServer, // Attempting to connect to the Game Server
+        ConnectedToGameServer, // Successfully connected to the Game Server, ready for login
+        Authenticating, // Client is authenticating with the Game Server
+        SelectingCharacter, // Client is selecting a character to play
+        InGame, // Client is in the game world
+        Disconnected // Client is disconnected from all servers
     }
 
     /// <summary>
-    /// Main client class managing connection, login, character handling and packet routing.
+    /// Main client class responsible for managing the connection, login process, character handling, and packet routing.
+    /// Implements IAsyncDisposable for proper resource cleanup.
     /// </summary>
     public sealed class SimpleLoginClient : IAsyncDisposable
     {
+        /// <summary>
+        /// Encryption keys used for communication with the server.
+        /// </summary>
         private static readonly SimpleModulusKeys EncryptKeys = PipelinedSimpleModulusEncryptor.DefaultClientKey;
+        /// <summary>
+        /// Decryption keys used for communication with the server.
+        /// </summary>
         private static readonly SimpleModulusKeys DecryptKeys = PipelinedSimpleModulusDecryptor.DefaultClientKey;
+        /// <summary>
+        /// XOR3 keys used for packet encryption/decryption.
+        /// </summary>
         private static readonly byte[] Xor3Keys = DefaultKeys.Xor3Keys;
 
         private readonly ILogger<SimpleLoginClient> _logger;
@@ -58,91 +72,94 @@ namespace MuOnlineConsole
         private readonly ConnectServerService _connectServerService;
         private readonly PacketRouter _packetRouter;
         private readonly MuOnlineSettings _settings;
+        private readonly CharacterState _characterState;
+        private readonly ScopeManager _scopeManager;
 
         private ClientConnectionState _currentState = ClientConnectionState.Initial;
         private List<ServerInfo> _serverList = new();
-        private List<string>? _pendingCharacterSelection = null;
-
-        // Character State (Game Server related)
-        private uint _currentHealth = 0;
-        private uint _maximumHealth = 1;
-        private uint _currentShield = 0;
-        private uint _maximumShield = 0;
-        private uint _currentMana = 0;
-        private uint _maximumMana = 1;
-        private uint _currentAbility = 0;
-        private uint _maximumAbility = 0;
-        private ushort _strength = 0;
-        private ushort _agility = 0;
-        private ushort _vitality = 0;
-        private ushort _energy = 0;
-        private ushort _leadership = 0;
-        private string _characterName = "???";
-        private bool _isInGame = false;
+        private List<(string Name, CharacterClassNumber Class)>? _pendingCharacterSelection = null;
+        private bool _isWalking = false; // Flag to indicate if the character is currently performing a walk action
         private CancellationTokenSource? _cancellationTokenSource;
-        private ushort _characterId = 0xFFFF;
-        private byte _currentX = 0;
-        private byte _currentY = 0;
-        private bool _isWalking = false;
-        private readonly string _username;
-        private readonly string _password;
-        private Dictionary<byte, byte> _serverDirectionMap = new();
-        private readonly ConcurrentDictionary<ushort, ScopeObject> _objectsInScope = new();
-        private readonly ConcurrentDictionary<byte, byte[]> _inventoryItems = new();
-        private byte _inventoryExpansionState = 0; // Stores the state of inventory extensions
+        private readonly Dictionary<byte, byte> _serverDirectionMap; // Map for translating client-side directions to server-side directions
 
-
-        public bool IsInGame => _isInGame;
+        /// <summary>
+        /// Indicates if the client is currently in the game world.
+        /// </summary>
+        public bool IsInGame => _characterState.IsInGame;
+        /// <summary>
+        /// Gets the ID of the currently selected character.
+        /// </summary>
+        public ushort GetCharacterId() => _characterState.Id;
+        /// <summary>
+        /// Gets the name of the currently selected character.
+        /// </summary>
+        public string GetCharacterName() => _characterState.Name;
+        /// <summary>
+        /// Indicates if the client is currently connected to a server.
+        /// </summary>
         public bool IsConnected => _connectionManager.IsConnected;
-        public ushort GetCharacterId() => _characterId;
-        public string GetCharacterName() => _characterName;
-        public bool LastPickupSucceeded { get; set; } = false;
-        public bool PickupHandled { get; set; } = false;
+        /// <summary>
+        /// Indicates if the last item pickup attempt was successful.
+        /// </summary>
+        public bool LastPickupSucceeded { get; set; } = false; // TODO: Consider moving this state if pickup logic is extracted
+        /// <summary>
+        /// Indicates if the pickup action has been handled by the server response.
+        /// </summary>
+        public bool PickupHandled { get; set; } = false; // TODO: Consider moving this state if pickup logic is extracted
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SimpleLoginClient"/> class.
+        /// </summary>
+        /// <param name="loggerFactory">The logger factory used for creating loggers.</param>
+        /// <param name="settings">The settings for the Mu Online client.</param>
         public SimpleLoginClient(ILoggerFactory loggerFactory, MuOnlineSettings settings)
         {
             _loggerFactory = loggerFactory;
             _logger = loggerFactory.CreateLogger<SimpleLoginClient>();
-            _settings = settings; // Store settings
+            _settings = settings;
 
             var clientVersionBytes = Encoding.ASCII.GetBytes(settings.ClientVersion);
             var clientSerialBytes = Encoding.ASCII.GetBytes(settings.ClientSerial);
-            var targetVersion = Enum.Parse<TargetProtocolVersion>(settings.ProtocolVersion, ignoreCase: true);
+            var targetVersion = System.Enum.Parse<TargetProtocolVersion>(settings.ProtocolVersion, ignoreCase: true);
 
+            // Initialize state and managers first to ensure they are available for services and packet router.
+            _characterState = new CharacterState(_loggerFactory);
+            _scopeManager = new ScopeManager(_loggerFactory, _characterState);
+
+            // Initialize services which handle specific network operations.
             _connectionManager = new ConnectionManager(loggerFactory, EncryptKeys, DecryptKeys);
-            _loginService = new LoginService(_connectionManager, _logger, clientVersionBytes, clientSerialBytes, Xor3Keys);
-            _characterService = new CharacterService(_connectionManager, _logger);
+            _loginService = new LoginService(_connectionManager, _loggerFactory.CreateLogger<LoginService>(), clientVersionBytes, clientSerialBytes, Xor3Keys);
+            _characterService = new CharacterService(_connectionManager, _loggerFactory.CreateLogger<CharacterService>());
             _connectServerService = new ConnectServerService(_connectionManager, _loggerFactory.CreateLogger<ConnectServerService>());
-            _packetRouter = new PacketRouter(loggerFactory.CreateLogger<PacketRouter>(), _characterService, _loginService, targetVersion, this, _settings);
+
+            // Initialize PacketRouter, which is responsible for routing incoming packets to appropriate handlers.
+            // Passing dependencies needed by its internal handlers.
+            _packetRouter = new PacketRouter(loggerFactory, _characterService, _loginService, targetVersion, this, _characterState, _scopeManager, _settings);
+
             _serverDirectionMap = settings.DirectionMap;
-            _username = settings.Username;
-            _password = settings.Password;
         }
 
         /// <summary>
-        /// Main loop: connect and run client logic.
+        /// Runs the main client execution loop asynchronously.
+        /// This includes connecting to the server, handling commands, and managing the client lifecycle.
         /// </summary>
         public async Task RunAsync()
         {
             _logger.LogInformation("🚀 Starting client execution (Target: {Version})...", _packetRouter.TargetVersion);
-            _logger.LogInformation("🔍 Using username '{Username}' and password '{Password}'", _username, _password);
+            _logger.LogInformation("🔍 Using username '{Username}' and password '{Password}'", _settings.Username, _settings.Password);
             _cancellationTokenSource = new CancellationTokenSource();
             var cancellationToken = _cancellationTokenSource.Token;
 
-            // Start Command Loop in background
             var commandLoopTask = Task.Run(() => CommandLoopAsync(cancellationToken), cancellationToken);
 
-            // Start Connection Process
             await ConnectToConnectServerAsync(cancellationToken);
 
-            // Keep the application running until cancelled or command loop finishes
             try
             {
-                // Wait for either cancellation or the command loop to naturally end (e.g., 'exit' command)
-                await commandLoopTask; // If command loop ends, we should shut down.
+                await commandLoopTask;
                 if (!cancellationToken.IsCancellationRequested)
                 {
-                    _cancellationTokenSource.Cancel(); // Ensure shutdown if command loop exited normally
+                    _cancellationTokenSource.Cancel();
                 }
             }
             catch (OperationCanceledException)
@@ -157,54 +174,67 @@ namespace MuOnlineConsole
             {
                 if (!_cancellationTokenSource.IsCancellationRequested)
                 {
-                    _cancellationTokenSource.Cancel(); // Ensure cancellation token is set for cleanup
+                    _cancellationTokenSource.Cancel();
                 }
             }
 
             _logger.LogInformation("Shutting down client...");
         }
 
+        /// <summary>
+        /// Establishes a connection to the Connect Server asynchronously.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token that can be used to cancel the operation.</param>
         private async Task ConnectToConnectServerAsync(CancellationToken cancellationToken)
         {
             _currentState = ClientConnectionState.ConnectingToConnectServer;
-            _packetRouter.SetRoutingMode(true); // Route Connect Server packets
+            _packetRouter.SetRoutingMode(true); // Enable routing for Connect Server packets
 
-            if (await _connectionManager.ConnectAsync(_settings.ConnectServerHost, _settings.ConnectServerPort, false, cancellationToken)) // Connect Server usually doesn't use encryption
+            if (await _connectionManager.ConnectAsync(_settings.ConnectServerHost, _settings.ConnectServerPort, false, cancellationToken))
             {
                 _currentState = ClientConnectionState.ConnectedToConnectServer;
-                _connectionManager.Connection.PacketReceived += HandlePacketAsync;
-                _connectionManager.Connection.Disconnected += HandleDisconnectAsync;
+                _connectionManager.Connection.PacketReceived += HandlePacketAsync; // Subscribe to packet received event
+                _connectionManager.Connection.Disconnected += HandleDisconnectAsync; // Subscribe to disconnected event
 
                 _logger.LogInformation("✅ Successfully connected to Connect Server. Requesting server list...");
                 _currentState = ClientConnectionState.RequestingServerList;
-                await _connectServerService.RequestServerListAsync();
+                await _connectServerService.RequestServerListAsync(); // Request the server list from the Connect Server
             }
             else
             {
                 _logger.LogError("❌ Connection to Connect Server failed.");
                 _currentState = ClientConnectionState.Disconnected;
-                _cancellationTokenSource?.Cancel(); // Stop the client if CS connection fails
+                _cancellationTokenSource?.Cancel(); // Cancel the client operation if connection fails
             }
         }
 
         /// <summary>
-        /// Stores the received server list and prompts the user.
+        /// Stores the received server list and updates the client state.
         /// </summary>
+        /// <param name="servers">The list of servers received from the Connect Server.</param>
         public void StoreServerList(List<ServerInfo> servers)
         {
             _serverList = servers;
             _currentState = ClientConnectionState.ReceivedServerList;
             _logger.LogInformation("📝 Server list received with {Count} servers.", servers.Count);
+            DisplayServerList(); // Display the received server list to the console
+        }
+
+        /// <summary>
+        /// Displays the list of available servers in the console.
+        /// </summary>
+        private void DisplayServerList()
+        {
             Console.WriteLine("=== Available Servers ===");
-            if (servers.Count == 0)
+            if (_serverList.Count == 0)
             {
                 Console.WriteLine("No servers available.");
             }
             else
             {
-                for (int i = 0; i < servers.Count; i++)
+                for (int i = 0; i < _serverList.Count; i++)
                 {
-                    Console.WriteLine($"  {i + 1}. ID: {servers[i].ServerId}, Load: {servers[i].LoadPercentage}%");
+                    Console.WriteLine($"  {i + 1}. ID: {_serverList[i].ServerId}, Load: {_serverList[i].LoadPercentage}%");
                 }
             }
             Console.WriteLine("👉 Type 'connect <number>' (e.g., 'connect 1') to connect to a server.");
@@ -212,9 +242,10 @@ namespace MuOnlineConsole
         }
 
         /// <summary>
-        /// Handles the user selecting a server from the list.
+        /// Handles the server selection process based on the server ID.
         /// </summary>
-        private async Task HandleServerSelection(ushort serverId)
+        /// <param name="serverId">The ID of the server selected by the user.</param>
+        private async Task HandleServerSelectionAsync(ushort serverId)
         {
             if (_currentState != ClientConnectionState.ReceivedServerList)
             {
@@ -224,12 +255,14 @@ namespace MuOnlineConsole
 
             _logger.LogInformation("👉 Requesting connection details for Server ID {ServerId}...", serverId);
             _currentState = ClientConnectionState.RequestingConnectionInfo;
-            await _connectServerService.RequestConnectionInfoAsync(serverId);
+            await _connectServerService.RequestConnectionInfoAsync(serverId); // Request connection info for the selected server
         }
 
         /// <summary>
-        /// Disconnects from the Connect Server and connects to the specified Game Server.
+        /// Switches the client connection from the Connect Server to the Game Server.
         /// </summary>
+        /// <param name="host">The host address of the Game Server.</param>
+        /// <param name="port">The port number of the Game Server.</param>
         public async void SwitchToGameServer(string host, int port)
         {
             if (_currentState != ClientConnectionState.RequestingConnectionInfo)
@@ -241,45 +274,38 @@ namespace MuOnlineConsole
 
             _logger.LogInformation("🔌 Disconnecting from Connect Server...");
 
-            // Get a reference to the current connection BEFORE disconnecting
             var oldConnection = _connectionManager.Connection;
-
-            // Unsubscribe event handlers from the OLD connection immediately
             if (oldConnection != null)
             {
-                oldConnection.PacketReceived -= HandlePacketAsync;
-                oldConnection.Disconnected -= HandleDisconnectAsync;
+                oldConnection.PacketReceived -= HandlePacketAsync; // Unsubscribe from packet received event of the old connection
+                oldConnection.Disconnected -= HandleDisconnectAsync; // Unsubscribe from disconnected event of the old connection
                 _logger.LogDebug("Unsubscribed event handlers from old Connect Server connection.");
             }
 
-            await _connectionManager.DisconnectAsync(); // Now disconnect and dispose
+            await _connectionManager.DisconnectAsync(); // Disconnect from the Connect Server
 
             _logger.LogInformation("🔌 Connecting to Game Server {Host}:{Port}...", host, port);
             _currentState = ClientConnectionState.ConnectingToGameServer;
-            _packetRouter.SetRoutingMode(false);
+            _packetRouter.SetRoutingMode(false); // Disable routing for Connect Server packets, enable for Game Server
 
             if (await _connectionManager.ConnectAsync(host, port, true, _cancellationTokenSource?.Token ?? default))
             {
                 _currentState = ClientConnectionState.ConnectedToGameServer;
 
-                // Subscribe event handlers to the NEW connection
                 if (_connectionManager.Connection != null)
                 {
-                    _connectionManager.Connection.PacketReceived += HandlePacketAsync;
-                    _connectionManager.Connection.Disconnected += HandleDisconnectAsync;
+                    _connectionManager.Connection.PacketReceived += HandlePacketAsync; // Subscribe to packet received event for the new connection
+                    _connectionManager.Connection.Disconnected += HandleDisconnectAsync; // Subscribe to disconnected event for the new connection
                     _logger.LogDebug("Subscribed event handlers to new Game Server connection.");
+                    _logger.LogInformation("✅ Successfully connected to Game Server. Ready to login.");
+                    // F1 00 handler in PacketRouter will trigger SendLoginRequest upon successful connection
                 }
                 else
                 {
-                    // This case should ideally not happen if ConnectAsync returned true, but good to have a check.
                     _logger.LogError("❌ Failed to get new connection object after connecting to Game Server.");
                     _currentState = ClientConnectionState.Disconnected;
-                    _cancellationTokenSource?.Cancel(); // Stop the client
-                    return; // Exit the method
+                    _cancellationTokenSource?.Cancel();
                 }
-
-                _logger.LogInformation("✅ Successfully connected to Game Server. Ready to login.");
-                // F1 00 handler will trigger login
             }
             else
             {
@@ -291,7 +317,6 @@ namespace MuOnlineConsole
 
         /// <summary>
         /// Sends the login request to the Game Server.
-        /// Should be called after successfully connecting to the GS.
         /// </summary>
         public void SendLoginRequest()
         {
@@ -301,723 +326,58 @@ namespace MuOnlineConsole
                 return;
             }
             _currentState = ClientConnectionState.Authenticating;
-            Task.Run(() => _loginService.SendLoginRequestAsync(_username, _password));
+            Task.Run(() => _loginService.SendLoginRequestAsync(_settings.Username, _settings.Password)); // Send login request in a separate task
         }
 
-
+        /// <summary>
+        /// Handles incoming packets by routing them to the PacketRouter.
+        /// </summary>
+        /// <param name="sequence">The read-only sequence of bytes representing the received packet.</param>
+        /// <returns>A ValueTask representing the asynchronous operation.</returns>
         private ValueTask HandlePacketAsync(ReadOnlySequence<byte> sequence)
         {
-            // Route based on the current mode set in PacketRouter
-            return new ValueTask(_packetRouter.RoutePacketAsync(sequence));
+            return new ValueTask(_packetRouter.RoutePacketAsync(sequence)); // Route the received packet
         }
 
+        /// <summary>
+        /// Handles disconnection events by notifying the PacketRouter.
+        /// </summary>
+        /// <returns>A ValueTask representing the asynchronous operation.</returns>
         private ValueTask HandleDisconnectAsync()
         {
-            // Let the PacketRouter handle the logic based on its current mode
-            return new ValueTask(_packetRouter.OnDisconnected());
-        }
-
-        private static double DistanceSquared(double x1, double y1, double x2, double y2)
-        {
-            double dx = x1 - x2;
-            double dy = y1 - y2;
-            return (dx * dx) + (dy * dy);
+            return new ValueTask(_packetRouter.OnDisconnected()); // Notify packet router about disconnection
         }
 
         /// <summary>
-        /// Finds the nearest item (Item or Money) within pickup range and returns its Raw ID.
-        /// Ignores objects at position (0,0).
+        /// Presents the character selection list to the user in the console and prepares for character selection.
         /// </summary>
-        /// <returns>The Raw ID of the nearest item, or null if nothing is found within range.</returns>
-        private ushort? FindNearestPickupItemRawId()
+        /// <param name="characters">The list of available characters for the account.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        public Task SelectCharacterInteractivelyAsync(List<(string Name, CharacterClassNumber Class)> characters)
         {
-            double minDistanceSq = double.MaxValue;
-            ScopeObject? nearestObject = null;
-
-            // Combine the list of items and money to check
-            var groundItems = GetScopeItems(ScopeObjectType.Item).Concat(GetScopeItems(ScopeObjectType.Money));
-
-            foreach (var obj in groundItems)
-            {
-                // Ignore objects at (0,0), they might be invalid
-                if (obj.PositionX == 0 && obj.PositionY == 0) continue;
-
-                double distSq = DistanceSquared(_currentX, _currentY, obj.PositionX, obj.PositionY);
-                if (distSq < minDistanceSq)
-                {
-                    minDistanceSq = distSq;
-                    nearestObject = obj;
-                }
-            }
-
-            // Optional check for maximum pickup distance
-            const double maxPickupDistanceSq = 5 * 5; // Example: Maximum distance of 5 units
-            if (nearestObject != null && minDistanceSq <= maxPickupDistanceSq)
-            {
-                _logger.LogInformation("Nearest object found: {Object} at distance squared {DistanceSq}", nearestObject, minDistanceSq);
-                // Return the RawId of the found object
-                return nearestObject.RawId;
-            }
-            else if (nearestObject != null)
-            {
-                _logger.LogInformation("Nearest object {Object} is too far away (Distance Squared: {DistanceSq})", nearestObject, minDistanceSq);
-                return null;
-            }
-            else
-            {
-                _logger.LogInformation("No items or money found nearby.");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Tries to get the name or description of an object currently in scope by its ID.
-        /// Handles player names, NPC names/types, and descriptions for items/money.
-        /// Automatically applies the ID mask (removes the highest bit).
-        /// </summary>
-        /// <param name="id">The potentially masked ID received from the server.</param>
-        /// <param name="name">When this method returns, contains the name or description of the object, if found; otherwise, null.</param>
-        /// <returns>True if an object with the masked ID was found in scope; otherwise, false.</returns>
-        public bool TryGetScopeObjectName(ushort id, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out string? name)
-        {
-            // Always mask the ID before looking it up, as dictionary keys are masked IDs.
-            ushort maskedId = (ushort)(id & 0x7FFF);
-
-            if (_objectsInScope.TryGetValue(maskedId, out ScopeObject? scopeObject))
-            {
-                switch (scopeObject.ObjectType)
-                {
-                    case ScopeObjectType.Player:
-                        name = ((PlayerScopeObject)scopeObject).Name;
-                        return true;
-                    case ScopeObjectType.Npc:
-                    case ScopeObjectType.Monster: // Treat Monster similar to NPC for naming
-                        var npcObject = (NpcScopeObject)scopeObject;
-                        // Prefer name if available, otherwise use type number
-                        name = !string.IsNullOrWhiteSpace(npcObject.Name) ? npcObject.Name : $"NPC Type {npcObject.TypeNumber}";
-                        return true;
-                    case ScopeObjectType.Item:
-                        name = ((ItemScopeObject)scopeObject).ItemDescription; // Use the generated description
-                        return true;
-                    case ScopeObjectType.Money:
-                        name = "Zen"; // Money is typically just "Zen"
-                        return true;
-                    default:
-                        name = $"Unknown Object Type ({scopeObject.ObjectType})";
-                        _logger.LogWarning("Found object with ID {MaskedId:X4} but unknown type {Type}", maskedId, scopeObject.ObjectType);
-                        return true; // Technically found, but type is unknown
-                }
-            }
-            else
-            {
-                // Object not found in scope
-                name = null;
-                _logger.LogTrace("Object with masked ID {MaskedId:X4} (from RawID {RawId:X4}) not found in scope.", maskedId, id);
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Updates the character's inventory based on the received packet data.
-        /// Handles different protocol versions.
-        /// </summary>
-        /// <param name="inventoryPacketData">The raw packet data for the inventory.</param>
-        public void UpdateInventory(Memory<byte> inventoryPacketData)
-        {
-            // Clear the old inventory before adding new items
-            _inventoryItems.Clear();
-            try
-            {
-                int itemCount = 0;
-                int firstItemOffset = 0;
-                int itemDataSize = 0; // Size of the item data part ONLY
-
-                // Determine itemCount, offset, and itemDataSize based on protocol version
-                // We'll use the S6 Ref struct for header parsing where possible,
-                // but adjust offsets and item data size manually for older versions.
-                switch (_packetRouter.TargetVersion)
-                {
-                    case TargetProtocolVersion.Season6:
-                        var inventoryS6 = new CharacterInventoryRef(inventoryPacketData.Span);
-                        itemCount = inventoryS6.ItemCount;
-                        firstItemOffset = 6; // C4 Header (5) + ItemCount (1)
-                        itemDataSize = 12;   // S6 Item Data size
-                        _logger.LogInformation("🎒 Updating inventory (S6) ({Count} items)...", itemCount);
-                        break;
-
-                    case TargetProtocolVersion.Version097:
-                        // Use C1HeaderRef for header parsing as CharacterInventory095Ref doesn't exist
-                        var header097 = new C1HeaderWithSubCodeRef(inventoryPacketData.Span); // Assuming F3 10 uses SubCode
-                        if (header097.Code != 0xF3 || header097.SubCode != 0x10)
-                        {
-                            _logger.LogWarning("Received unexpected packet instead of 0.97 Inventory.");
-                            return;
-                        }
-                        itemCount = inventoryPacketData.Span[4]; // Item count is at index 4 for C1 packets
-                        firstItemOffset = 5; // C1 Header (4) + ItemCount (1)
-                        itemDataSize = 11;   // 0.95/0.97 Item Data size
-                        _logger.LogInformation("🎒 Updating inventory (0.97/0.95) ({Count} items)...", itemCount);
-                        break;
-
-                    case TargetProtocolVersion.Version075:
-                        // Use C1HeaderRef for header parsing as CharacterInventory075Ref doesn't exist
-                        var header075 = new C1HeaderWithSubCodeRef(inventoryPacketData.Span); // Assuming F3 10 uses SubCode
-                        if (header075.Code != 0xF3 || header075.SubCode != 0x10)
-                        {
-                            _logger.LogWarning("Received unexpected packet instead of 0.75 Inventory.");
-                            return;
-                        }
-                        itemCount = inventoryPacketData.Span[4]; // Item count is at index 4 for C1 packets
-                        firstItemOffset = 5; // C1 Header (4) + ItemCount (1)
-                        itemDataSize = 7;    // 0.75 Item Data size
-                        _logger.LogInformation("🎒 Updating inventory (0.75) ({Count} items)...", itemCount);
-                        break;
-
-                    default:
-                        _logger.LogWarning("Inventory handling for version {Version} not implemented.", _packetRouter.TargetVersion);
-                        return; // Exit if version not handled
-                }
-
-                int storedItemSize = 1 + itemDataSize; // Total size: Slot byte (1) + Item Data
-
-                // Generic loop to process items based on determined parameters
-                int currentOffset = firstItemOffset;
-                for (int i = 0; i < itemCount; i++)
-                {
-                    if (currentOffset >= inventoryPacketData.Length)
-                    {
-                        _logger.LogWarning("Inventory packet too short while parsing item {ItemIndex}", i);
-                        break; // Prevent reading out of bounds
-                    }
-
-                    byte itemSlot = inventoryPacketData.Span[currentOffset];
-
-                    if (currentOffset + storedItemSize > inventoryPacketData.Length)
-                    {
-                        _logger.LogWarning("Inventory packet too short for full item data at slot {Slot}, index {ItemIndex}", itemSlot, i);
-                        break; // Prevent reading out of bounds
-                    }
-
-                    // Extract the item data based on the calculated size for the version
-                    var itemData = inventoryPacketData.Slice(currentOffset + 1, itemDataSize);
-                    _inventoryItems.TryAdd(itemSlot, itemData.ToArray()); // Store a copy of the item data
-                    _logger.LogDebug($"  -> Slot {itemSlot}: {ItemDatabase.GetItemName(itemData.Span) ?? "Unknown Item"} (DataLen: {itemDataSize})");
-
-                    currentOffset += storedItemSize; // Move to the next item
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "💥 Error processing inventory packet.");
-            }
-            UpdateConsoleTitle(); // Update console title if needed
-        }
-
-
-        /// <summary>
-        /// Updates the state of the inventory expansion.
-        /// </summary>
-        /// <param name="expansionState">The expansion state byte from the server.</param>
-        public void UpdateInventoryExpansion(byte expansionState)
-        {
-            _inventoryExpansionState = expansionState;
-            _logger.LogInformation("💾 Inventory Expansion State: {State}", expansionState);
-        }
-
-        /// <summary>
-        /// Displays the current character statistics in the console.
-        /// </summary>
-        private void DisplayCharacterStats()
-        {
-            if (!IsInGame)
-            {
-                _logger.LogWarning("Cannot display stats - character not in game.");
-                return;
-            }
-
-            Console.WriteLine("\n--- Character Stats ---");
-            Console.WriteLine($"  Name: {_characterName} (ID: {_characterId:X4})");
-            Console.WriteLine($"  Position: ({_currentX}, {_currentY})");
-            Console.WriteLine($"  HP: {_currentHealth}/{_maximumHealth}");
-            Console.WriteLine($"  Mana: {_currentMana}/{_maximumMana}");
-            Console.WriteLine($"  SD: {_currentShield}/{_maximumShield}");
-            Console.WriteLine($"  AG: {_currentAbility}/{_maximumAbility}");
-            Console.WriteLine($"  Strength: {_strength}");
-            Console.WriteLine($"  Agility: {_agility}");
-            Console.WriteLine($"  Vitality: {_vitality}");
-            Console.WriteLine($"  Energy: {_energy}");
-            Console.WriteLine($"  Command: {_leadership}");
-            Console.WriteLine("-----------------------\n");
-        }
-
-        /// <summary>
-        /// Displays the current character inventory in the console.
-        /// </summary>
-        private void DisplayInventory()
-        {
-            if (!IsInGame)
-            {
-                _logger.LogWarning("Cannot display inventory - character not in game.");
-                return;
-            }
-
-            Console.WriteLine("\n--- Inventory ---");
-            if (_inventoryItems.IsEmpty)
-            {
-                Console.WriteLine(" (Inventory is empty)");
-            }
-            else
-            {
-                // Sort by slot index for better readability
-                foreach (var kvp in _inventoryItems.OrderBy(kv => kv.Key))
-                {
-                    byte slot = kvp.Key;
-                    byte[] itemData = kvp.Value;
-                    string itemName = ItemDatabase.GetItemName(itemData) ?? "Unknown Item";
-                    // TODO: Add parsing for level, options, durability etc. from itemData for a more detailed view
-                    Console.WriteLine($"  Slot {slot,3}: {itemName}");
-                }
-            }
-            Console.WriteLine($"  Expansion State: {_inventoryExpansionState}"); // Display expansion state
-            Console.WriteLine("-----------------\n");
-        }
-
-
-        /// <summary>
-        /// Handles the main command loop for user input.
-        /// </summary>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        private async Task CommandLoopAsync(CancellationToken cancellationToken)
-        {
-            _logger.LogInformation("⌨️ Command loop started. Type 'exit' to quit.");
-            while (!cancellationToken.IsCancellationRequested) // Keep loop running even if disconnected, allows reconnect attempts etc.
-            {
-                string? commandLine = null;
-                try
-                {
-                    // Use ReadLineAsync with cancellation token
-                    commandLine = await Console.In.ReadLineAsync(cancellationToken);
-                }
-                catch (OperationCanceledException) { break; } // Expected when shutting down
-                catch (IOException ex) { _logger.LogError(ex, "Error reading command line input (IO)."); break; }
-                catch (Exception ex) { _logger.LogError(ex, "Error reading command line input."); break; }
-
-                if (cancellationToken.IsCancellationRequested || commandLine == null) break;
-
-                var parts = commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 0) continue;
-
-                var command = parts[0].ToLowerInvariant();
-
-                // --- General Commands ---
-                if (command == "exit")
-                {
-                    _logger.LogInformation("Received 'exit' command. Shutting down...");
-                    _cancellationTokenSource?.Cancel();
-                    return; // Exit the loop
-                }
-
-                // --- Connect Server State Commands ---
-                if (_currentState < ClientConnectionState.ConnectingToGameServer)
-                {
-                    switch (command)
-                    {
-                        case "servers":
-                        case "list":
-                            if (_serverList.Count > 0)
-                            {
-                                StoreServerList(_serverList); // Re-display the list
-                            }
-                            else
-                            {
-                                _logger.LogWarning("No server list available. Use 'refresh'.");
-                            }
-                            break;
-
-                        case "refresh":
-                            if (_currentState == ClientConnectionState.ConnectedToConnectServer || _currentState == ClientConnectionState.ReceivedServerList)
-                            {
-                                _logger.LogInformation("Requesting updated server list...");
-                                _currentState = ClientConnectionState.RequestingServerList;
-                                await _connectServerService.RequestServerListAsync();
-                            }
-                            else
-                            {
-                                _logger.LogWarning("Cannot refresh server list, not connected to Connect Server.");
-                            }
-                            break;
-
-                        case "connect":
-                            if (_currentState != ClientConnectionState.ReceivedServerList)
-                            {
-                                _logger.LogWarning("Please wait for the server list or use 'refresh'.");
-                                break;
-                            }
-                            if (parts.Length != 2 || !int.TryParse(parts[1], out int index) || index < 1 || index > _serverList.Count)
-                            {
-                                _logger.LogWarning("Usage: connect <number> (1-{Max})", _serverList.Count);
-                                break;
-                            }
-                            var selectedServer = _serverList[index - 1];
-                            await HandleServerSelection(selectedServer.ServerId);
-                            break;
-
-                        default:
-                            _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
-                            break;
-                    }
-                }
-                // --- Game Server State Commands ---
-                else if (_currentState >= ClientConnectionState.ConnectedToGameServer)
-                {
-                    switch (command)
-                    {
-                        case "select": // Character Selection
-                            if (_pendingCharacterSelection == null)
-                            {
-                                _logger.LogWarning("No character list available to select from.");
-                                break;
-                            }
-                            if (parts.Length != 2 || !int.TryParse(parts[1], out int index) || index < 1 || index > _pendingCharacterSelection.Count)
-                            {
-                                _logger.LogWarning("Usage: select <number> (1-{Max})", _pendingCharacterSelection.Count);
-                                break;
-                            }
-                            var selectedName = _pendingCharacterSelection[index - 1];
-                            _logger.LogInformation("🎯 Selected character: {Name}", selectedName);
-                            _characterName = selectedName; // Store the name
-                            _currentState = ClientConnectionState.SelectingCharacter;
-                            _ = _characterService.SelectCharacterAsync(selectedName);
-                            _pendingCharacterSelection = null; // Clear pending list
-                            break;
-
-                        case "nearby":
-                        case "scope":
-                            ListObjectsInScope();
-                            break;
-
-                        case "move":
-                            if (!IsInGame) { _logger.LogWarning("Cannot move - character is not in game."); continue; }
-                            if (_isWalking) { _logger.LogWarning("🚶 Character is currently walking, cannot use 'move'."); continue; }
-                            if (parts.Length == 3 && byte.TryParse(parts[1], out byte x) && byte.TryParse(parts[2], out byte y))
-                            {
-                                await _characterService.SendInstantMoveRequestAsync(x, y);
-                            }
-                            else { _logger.LogWarning("Invalid 'move' command format. Use: move X Y"); }
-                            break;
-
-                        case "walkto":
-                            if (!IsInGame) { _logger.LogWarning("Cannot walk - character is not in game."); continue; }
-                            if (_isWalking) { _logger.LogWarning("🚶 Character is already moving, please wait."); continue; }
-                            if (parts.Length == 3 && byte.TryParse(parts[1], out byte targetX) && byte.TryParse(parts[2], out byte targetY))
-                            {
-                                byte startX = _currentX;
-                                byte startY = _currentY;
-                                var generatedPath = GenerateSimplePathTowards(startX, startY, targetX, targetY);
-
-                                if (generatedPath.Length > 0)
-                                {
-                                    var translatedPath = generatedPath.Select(TranslateDirection).ToArray();
-                                    _isWalking = true;
-                                    try
-                                    {
-                                        byte firstTranslatedStep = translatedPath[0];
-                                        byte animationNumber = 0; // Default walk animation?
-                                        _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
-                                        await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
-
-                                        _logger.LogDebug("🚶 Sending WalkRequest. Client Position: ({CurrentX},{CurrentY}), Target: ({TargetX},{TargetY}), Original Path: [{OrigPath}], Translated Path: [{TransPath}]",
-                                                            _currentX, _currentY, targetX, targetY, string.Join(",", generatedPath), string.Join(",", translatedPath));
-                                        await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedPath);
-                                    }
-                                    catch (OperationCanceledException) { _isWalking = false; break; }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(ex, "Error during walkto sequence.");
-                                        _isWalking = false;
-                                    }
-                                }
-                                else { _logger.LogInformation("🚶 Already at target location or no path."); }
-                            }
-                            else { _logger.LogWarning("Invalid 'walkto' format. Use: walkto X Y"); }
-                            break;
-
-                        case "walk":
-                            if (!IsInGame) { _logger.LogWarning("Cannot walk - character is not in game."); continue; }
-                            if (_isWalking) { _logger.LogWarning("🚶 Character is already moving, please wait."); continue; }
-                            if (parts.Length > 1)
-                            {
-                                var directions = parts.Skip(1)
-                                                    .Select(p => byte.TryParse(p, out byte dir) && dir <= 7 ? (byte?)dir : null)
-                                                    .Where(d => d.HasValue)
-                                                    .Select(d => d.Value)
-                                                    .ToArray();
-
-                                if (directions.Length > 0)
-                                {
-                                    var translatedDirections = directions.Select(TranslateDirection).ToArray();
-                                    _isWalking = true;
-                                    try
-                                    {
-                                        byte firstTranslatedStep = translatedDirections[0];
-                                        byte animationNumber = 0; // Default walk animation?
-                                        _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
-                                        await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber);
-
-                                        _logger.LogInformation("🚶 Sending WalkRequest packet with start ({StartX},{StartY}), {Steps} steps (translated)...", _currentX, _currentY, translatedDirections.Length);
-                                        await _characterService.SendWalkRequestAsync(_currentX, _currentY, translatedDirections);
-                                    }
-                                    catch (OperationCanceledException) { _isWalking = false; break; }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogError(ex, "Error during walk sequence.");
-                                        _isWalking = false;
-                                    }
-                                }
-                                else { _logger.LogWarning("Invalid 'walk' arguments. Use numeric directions 0-7."); }
-                            }
-                            else
-                            {
-                                _logger.LogWarning("Invalid 'walk' command format. Use: walk <dir1> [dir2] ...");
-                                _logger.LogInformation("Directions: 0:W, 1:SW, 2:S, 3:SE, 4:E, 5:NE, 6:N, 7:NW");
-                            }
-                            break;
-
-                        case "pickup":
-                            if (!IsInGame)
-                            {
-                                _logger.LogWarning("Cannot pick up item - character is not in game.");
-                                continue;
-                            }
-
-                            if (parts.Length == 2)
-                            {
-                                ushort? targetItemIdRaw = null;
-                                string inputIdString = parts[1];
-
-                                if (inputIdString.ToLowerInvariant() == "near")
-                                {
-                                    targetItemIdRaw = FindNearestPickupItemRawId();
-                                    if (!targetItemIdRaw.HasValue)
-                                    {
-                                        _logger.LogInformation("No nearby items found to pick up.");
-                                        continue;
-                                    }
-
-                                    _logger.LogInformation("👜 Attempting to pick up nearest item (Raw ID {RawId:X4})...", targetItemIdRaw.Value);
-
-                                    // Retry loop: up to 20 attempts, sometimes an item is blocked because it belongs to another player u have to wait a certain amount of time
-                                    int attempts = 0;
-                                    const int maxAttempts = 20;
-                                    bool pickupSuccess = false;
-                                    DateTime startTime = DateTime.UtcNow;
-
-                                    while (!pickupSuccess && attempts < maxAttempts && (DateTime.UtcNow - startTime).TotalSeconds < 20)
-                                    {
-                                        await SendPickupRequest(targetItemIdRaw.Value);
-                                        await Task.Delay(1000); // Wait 1000 ms between retries
-
-                                        // Check if the item is still available. If not, we assume it was picked up.
-                                        ushort? currentItemId = FindNearestPickupItemRawId();
-                                        if (!currentItemId.HasValue || currentItemId.Value != targetItemIdRaw.Value)
-                                        {
-                                            pickupSuccess = true;
-                                            _logger.LogInformation("✅ Item (Raw ID {RawId:X4}) was successfully picked up after {Attempts} attempts.", targetItemIdRaw.Value, attempts + 1);
-                                        }
-
-                                        attempts++;
-                                    }
-
-                                    if (!pickupSuccess)
-                                    {
-                                        _logger.LogWarning("⚠️ Failed to pick up item (Raw ID {RawId:X4}) after {Attempts} attempts.", targetItemIdRaw.Value, attempts);
-                                    }
-                                }
-                                else if (ushort.TryParse(inputIdString, System.Globalization.NumberStyles.HexNumber, null, out ushort itemIdHexRaw))
-                                {
-                                    targetItemIdRaw = itemIdHexRaw;
-                                    _logger.LogInformation("👜 Attempting to pick up item with Raw ID {ItemId:X4} (parsed as hex from input '{Input}')...", targetItemIdRaw.Value, inputIdString);
-                                    await SendPickupRequest(targetItemIdRaw.Value);
-                                }
-                                else if (ushort.TryParse(inputIdString, out ushort itemIdDecRaw))
-                                {
-                                    targetItemIdRaw = itemIdDecRaw;
-                                    _logger.LogInformation("👜 Attempting to pick up item with Raw ID {ItemId:X4} (parsed as decimal from input '{Input}')...", targetItemIdRaw.Value, inputIdString);
-                                    await SendPickupRequest(targetItemIdRaw.Value);
-                                }
-                                else
-                                {
-                                    _logger.LogWarning("Invalid pickup target '{Target}'. Use: 'pickup near' or 'pickup <ItemID_Hex_Or_Dec>'.", inputIdString);
-                                    continue;
-                                }
-                            }
-                            else
-                            {
-                                _logger.LogWarning("Invalid 'pickup' command format. Use: 'pickup near' or 'pickup <ItemID>'.");
-                            }
-                            break;
-
-                        // --- New Commands ---
-                        case "stats":
-                            DisplayCharacterStats();
-                            break;
-
-                        case "inv":
-                        case "inventory":
-                            DisplayInventory();
-                            break;
-                        // --- End of New Commands ---
-
-                        default:
-                            _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
-                            break;
-                    }
-                }
-                else // Disconnected or Initial state
-                {
-                    _logger.LogWarning("❓ Not connected. Available commands: 'exit'.");
-                }
-            }
-            _logger.LogInformation("⌨️ Command loop ended.");
-        }
-
-        private async Task SendPickupRequest(ushort targetItemIdRaw)
-        {
-            ushort itemIdMasked = (ushort)(targetItemIdRaw & 0x7FFF);
-
-            try
-            {
-                using var owner = MemoryPool<byte>.Shared.Rent(32);
-                var writer = new ArrayBufferWriter<byte>();
-
-                // Build the pickup packet using the raw item ID (it will be masked before sending)
-                int packetSize = PacketBuilder.BuildPickupItemRequestPacket(writer, targetItemIdRaw, _packetRouter.TargetVersion);
-                var packetBytes = writer.WrittenSpan;
-
-                _logger.LogDebug("   -> Preparing pickup packet (Masked ID: {MaskedId:X4}, Version: {Version}): {PacketData}",
-                                 itemIdMasked, _packetRouter.TargetVersion, Convert.ToHexString(packetBytes));
-
-                // Send the pickup request packet using C3 header
-                await _connectionManager.Connection.SendPickupItemRequestAsync(itemIdMasked);
-                _logger.LogInformation("✔️ Pickup request sent for RAW ID {RawID:X4}.", targetItemIdRaw);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "💥 Error while building or sending pickup packet for Masked ID {MaskedId:X4}.", itemIdMasked);
-            }
-        }
-
-        private byte TranslateDirection(byte standardDirection)
-        {
-            if (_serverDirectionMap.TryGetValue(standardDirection, out byte serverDirection))
-            {
-                _logger.LogTrace("Translating direction {StandardDir} -> {ServerDir}", standardDirection, serverDirection);
-                return serverDirection;
-            }
-            _logger.LogWarning("Translation not found for direction {StandardDir}, using original.", standardDirection);
-            return standardDirection;
-        }
-
-        public Task SelectCharacterInteractivelyAsync(List<string> characterNames)
-        {
-            if (characterNames.Count == 0)
+            if (characters.Count == 0)
             {
                 _logger.LogWarning("⚠️ No characters available on the account.");
                 return Task.CompletedTask;
             }
 
             Console.WriteLine("🧍 Available characters:");
-            for (int i = 0; i < characterNames.Count; i++)
+            for (int i = 0; i < characters.Count; i++)
             {
-                Console.WriteLine($"  {i + 1}. {characterNames[i]}");
+                // Use Item1 for name, Item2 for class when accessing the tuple from the list
+                string className = CharacterClassDatabase.GetClassName(characters[i].Class); // Accessing Item2 via named property is fine here
+                Console.WriteLine($"  {i + 1}. {characters[i].Name} ({className})"); // Accessing Item1 via named property is fine here
             }
 
             Console.WriteLine("👉 Type: select <number>  (e.g. 'select 1') to choose a character.");
-
-            _pendingCharacterSelection = characterNames;
-
+            _pendingCharacterSelection = characters; // Store the character list for selection
             return Task.CompletedTask;
-        }
-
-        public void SignalMovementHandled()
-        {
-            if (_isWalking)
-            {
-                _logger.LogDebug("🚶 Movement processed (or failed), unlocking walk command.");
-                _isWalking = false;
-            }
-        }
-
-        // Generates a simple path TOWARDS the target (without pathfinding!)
-        private byte[] GenerateSimplePathTowards(byte startX, byte startY, byte targetX, byte targetY)
-        {
-            const int MaxStepsPerPacket = 15;
-            var path = new List<byte>(MaxStepsPerPacket);
-            int currentX = startX;
-            int currentY = startY;
-
-            for (int i = 0; i < MaxStepsPerPacket; i++)
-            {
-                int dx = targetX - currentX;
-                int dy = targetY - currentY;
-
-                if (dx == 0 && dy == 0)
-                {
-                    break; // Reached target
-                }
-
-                byte bestDirection = 0xFF; // Invalid direction
-
-                // Determine the best direction based on the largest difference
-                if (Math.Abs(dx) > Math.Abs(dy))
-                {
-                    if (dx > 0) bestDirection = 4; // East
-                    else bestDirection = 0; // West
-                }
-                else if (Math.Abs(dy) > Math.Abs(dx))
-                {
-                    if (dy > 0) bestDirection = 2; // South
-                    else bestDirection = 6; // North
-                }
-                else // Diagonal movement if dx and dy are equal non-zero
-                {
-                    if (dx > 0 && dy > 0) bestDirection = 3; // SE
-                    else if (dx < 0 && dy > 0) bestDirection = 1; // SW
-                    else if (dx > 0 && dy < 0) bestDirection = 5; // NE
-                    else if (dx < 0 && dy < 0) bestDirection = 7; // NW
-                }
-
-
-                if (bestDirection <= 7)
-                {
-                    path.Add(bestDirection);
-
-                    // Update current position based on the chosen direction
-                    switch (bestDirection)
-                    {
-                        case 0: currentX--; break;
-                        case 1: currentX--; currentY++; break;
-                        case 2: currentY++; break;
-                        case 3: currentX++; currentY++; break;
-                        case 4: currentX++; break;
-                        case 5: currentX++; currentY--; break;
-                        case 6: currentY--; break;
-                        case 7: currentX--; currentY--; break;
-                    }
-                }
-                else
-                {
-                    _logger.LogWarning("Could not determine direction from ({curX},{curY}) to ({tarX},{tarY})", currentX, currentY, targetX, targetY);
-                    break; // Should not happen if dx or dy is non-zero
-                }
-            }
-
-            return path.ToArray();
         }
 
         /// <summary>
         /// Requests the server list from the Connect Server.
         /// </summary>
+        /// <returns>A Task representing the asynchronous operation.</returns>
         public Task RequestServerList()
         {
             if (_currentState != ClientConnectionState.ConnectedToConnectServer && _currentState != ClientConnectionState.ReceivedServerList)
@@ -1028,272 +388,670 @@ namespace MuOnlineConsole
 
             _logger.LogInformation("Requesting server list...");
             _currentState = ClientConnectionState.RequestingServerList;
-            return _connectServerService.RequestServerListAsync();
+            return _connectServerService.RequestServerListAsync(); // Initiate server list request
         }
 
-        public void SetInGameStatus(bool inGame)
+        /// <summary>
+        /// Signals that a movement action has been processed, unlocking the walk command.
+        /// </summary>
+        public void SignalMovementHandled()
         {
-            bool changed = _isInGame != inGame;
-            _isInGame = inGame;
-            if (changed)
-            {
-                if (inGame)
-                {
-                    _currentState = ClientConnectionState.InGame;
-                    _logger.LogInformation("🟢 Character is now in-game. You can enter commands (e.g., 'move X Y').");
-                }
-                else
-                {
-                    // If we were in game and now we are not, it means we left the game world.
-                    // Reset state appropriately, maybe back to character selection or disconnected.
-                    // For now, let's assume disconnected if not explicitly selecting character again.
-                    _currentState = ClientConnectionState.ConnectedToGameServer; // Or Disconnected? Needs refinement based on logout packet handling
-                    _logger.LogInformation("🚪 Character has left the game world.");
-                }
-            }
-        }
-
-        public void SetCharacterId(ushort id)
-        {
-            _characterId = id;
-            _logger.LogInformation("🆔 Character ID set: {CharacterId:X4}", _characterId);
-        }
-
-        public void SetPosition(byte x, byte y)
-        {
-            _logger.LogDebug("🔄 Updating position: Old ({OldX},{OldY}), New ({NewX},{NewY})", _currentX, _currentY, x, y);
-            _currentX = x;
-            _currentY = y;
-            _logger.LogInformation("📍 Position set: ({X}, {Y})", _currentX, _currentY);
-            UpdateConsoleTitle();
-
             if (_isWalking)
             {
                 _logger.LogDebug("🚶 Movement processed (or failed), unlocking walk command.");
-                _isWalking = false;
-            }
-        }
-
-
-        public void SetCharacterName(string name)
-        {
-            _characterName = name;
-            UpdateConsoleTitle();
-        }
-
-        public void UpdateCurrentHealthShield(uint currentHealth, uint currentShield)
-        {
-            _currentHealth = currentHealth;
-            _currentShield = currentShield;
-            _logger.LogInformation("❤️ HP: {CurrentHealth}/{MaximumHealth} | 🛡️ SD: {CurrentShield}/{MaximumShield}",
-                _currentHealth, _maximumHealth, _currentShield, _maximumShield);
-            UpdateConsoleTitle();
-        }
-
-        public void UpdateMaximumHealthShield(uint maximumHealth, uint maximumShield)
-        {
-            _maximumHealth = Math.Max(1, maximumHealth);
-            _maximumShield = maximumShield;
-            _logger.LogInformation("❤️ Max HP: {MaximumHealth} | 🛡️ Max SD: {MaximumShield}",
-                _maximumHealth, _maximumShield);
-            UpdateConsoleTitle();
-        }
-
-        public void UpdateCurrentManaAbility(uint currentMana, uint currentAbility)
-        {
-            _currentMana = currentMana;
-            _currentAbility = currentAbility;
-            _logger.LogInformation("💧 Mana: {CurrentMana}/{MaximumMana} | ✨ AG: {CurrentAbility}/{MaximumAbility}",
-                _currentMana, _maximumMana, _currentAbility, _maximumAbility);
-            UpdateConsoleTitle();
-        }
-
-        public void UpdateMaximumManaAbility(uint maximumMana, uint maximumAbility)
-        {
-            _maximumMana = Math.Max(1, maximumMana);
-            _maximumAbility = maximumAbility;
-            _logger.LogInformation("💧 Max Mana: {MaximumMana} | ✨ Max AG: {MaximumAbility}",
-                _maximumMana, _maximumAbility);
-            UpdateConsoleTitle();
-        }
-
-        public void UpdateStats(ushort strength, ushort agility, ushort vitality, ushort energy, ushort leadership)
-        {
-            _strength = strength;
-            _agility = agility;
-            _vitality = vitality;
-            _energy = energy;
-            _leadership = leadership;
-            _logger.LogInformation("📊 Stats: Str={Str}, Agi={Agi}, Vit={Vit}, Ene={Ene}, Cmd={Cmd}",
-                _strength, _agility, _vitality, _energy, _leadership);
-        }
-
-        public void AddOrUpdatePlayerInScope(ushort maskedId, ushort rawId, byte x, byte y, string name)
-        {
-            var player = new PlayerScopeObject(maskedId, rawId, x, y, name);
-            _objectsInScope.AddOrUpdate(maskedId, player, (_, existing) =>
-            {
-                existing.PositionX = x;
-                existing.PositionY = y;
-                ((PlayerScopeObject)existing).Name = name;
-                existing.LastUpdate = DateTime.UtcNow;
-                // NOTE: RawId is init-only, no need to update here if it doesn't change for existing objects
-                return existing;
-            });
-            _logger.LogTrace("Scope Add/Update: Player {Name} ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", name, maskedId, rawId, x, y);
-        }
-
-        public void AddOrUpdateNpcInScope(ushort maskedId, ushort rawId, byte x, byte y, ushort typeNumber, string? name = null)
-        {
-            var npc = new NpcScopeObject(maskedId, rawId, x, y, typeNumber, name);
-            _objectsInScope.AddOrUpdate(maskedId, npc, (_, existing) =>
-            {
-                existing.PositionX = x;
-                existing.PositionY = y;
-                ((NpcScopeObject)existing).TypeNumber = typeNumber;
-                ((NpcScopeObject)existing).Name = name;
-                existing.LastUpdate = DateTime.UtcNow;
-                return existing;
-            });
-            _logger.LogTrace("Scope Add/Update: NPC Type {Type} ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", typeNumber, maskedId, rawId, x, y);
-        }
-
-        public void AddOrUpdateItemInScope(ushort maskedId, ushort rawId, byte x, byte y, ReadOnlySpan<byte> itemData)
-        {
-            var item = new ItemScopeObject(maskedId, rawId, x, y, itemData);
-            _objectsInScope.AddOrUpdate(maskedId, item, (_, existing) =>
-            {
-                existing.PositionX = x;
-                existing.PositionY = y;
-                existing.LastUpdate = DateTime.UtcNow;
-                return existing;
-            });
-            _logger.LogTrace("Scope Add/Update: Item ({Id:X4}, Raw: {RawId:X4}) at [{X},{Y}]", maskedId, rawId, x, y);
-        }
-
-        public void AddOrUpdateMoneyInScope(ushort maskedId, ushort rawId, byte x, byte y, uint amount)
-        {
-            var money = new MoneyScopeObject(maskedId, rawId, x, y, amount);
-            _objectsInScope.AddOrUpdate(maskedId, money, (_, existing) =>
-            {
-                existing.PositionX = x;
-                existing.PositionY = y;
-                ((MoneyScopeObject)existing).Amount = amount;
-                existing.LastUpdate = DateTime.UtcNow;
-                return existing;
-            });
-            _logger.LogTrace("Scope Add/Update: Money ({Id:X4}, Raw: {RawId:X4}) Amount {Amount} at [{X},{Y}]", maskedId, rawId, amount, x, y);
-        }
-
-        /// <summary>
-        /// Removes an object from the scope dictionary.
-        /// </summary>
-        /// <param name="id">The masked ID of the object to remove.</param>
-        /// <returns>True if the object was found and removed; otherwise, false.</returns>
-        public bool RemoveObjectFromScope(ushort id)
-        {
-            // Use TryRemove which returns true if the item was found and removed
-            if (_objectsInScope.TryRemove(id, out var removedObject))
-            {
-                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} ({Type}) - Success", id, removedObject.ObjectType);
-                return true; // Return true on successful removal
-            }
-            else
-            {
-                _logger.LogTrace("🔭 Scope Remove: ID {Id:X4} - Failed (Not Found)", id);
-                return false; // Return false if the object was not found
+                _isWalking = false; // Reset walking flag
             }
         }
 
         /// <summary>
-        /// Gets a snapshot of objects of a specific type currently in scope.
+        /// Signals that a movement action has been handled, even if walking flag was set due to error or unexpected state.
         /// </summary>
-        /// <param name="type">The type of object to retrieve.</param>
-        /// <returns>An enumerable of scope objects matching the type.</returns>
-        public IEnumerable<ScopeObject> GetScopeItems(ScopeObjectType type)
-        {
-            // Return a snapshot to avoid issues with collection modification during iteration
-            return _objectsInScope.Values.Where(obj => obj.ObjectType == type).ToList();
-        }
-
-        public void ClearScope(bool clearSelf = false)
-        {
-            if (clearSelf)
-            {
-                _objectsInScope.Clear();
-                _logger.LogInformation("🔭 Scope Cleared (All).");
-            }
-            else
-            {
-                // Keep self, remove others
-                if (_characterId != 0xFFFF && _objectsInScope.TryGetValue(_characterId, out var self))
-                {
-                    _objectsInScope.Clear();
-                    _objectsInScope.TryAdd(_characterId, self);
-                    _logger.LogInformation("🔭 Scope Cleared (Others). Kept Self ({Id:X4})", _characterId);
-                }
-                else
-                {
-                    _objectsInScope.Clear();
-                    _logger.LogInformation("🔭 Scope Cleared (All - Self ID Unknown).");
-                }
-            }
-        }
-
-        public void ListObjectsInScope()
-        {
-            Console.WriteLine("--- Objects in Scope ---");
-            if (_objectsInScope.IsEmpty)
-            {
-                Console.WriteLine(" (Scope is empty)");
-                return;
-            }
-
-            foreach (var kvp in _objectsInScope.OrderBy(o => o.Key)) // Order by ID for consistency
-            {
-                Console.WriteLine($"  {kvp.Value}"); // Use the ToString() override
-            }
-            Console.WriteLine($"--- Total: {_objectsInScope.Count} ---");
-        }
-
-        public bool ScopeContains(ushort id)
-        {
-            return _objectsInScope.ContainsKey(id);
-        }
-
-        public bool TryUpdateScopeObjectPosition(ushort id, byte x, byte y)
-        {
-            if (_objectsInScope.TryGetValue(id, out ScopeObject? scopeObject))
-            {
-                scopeObject.PositionX = x;
-                scopeObject.PositionY = y;
-                scopeObject.LastUpdate = DateTime.UtcNow;
-                return true;
-            }
-            return false;
-        }
-
         public void SignalMovementHandledIfWalking()
         {
             if (_isWalking)
             {
                 _logger.LogWarning("🚶 Releasing walk lock due to error or unexpected state.");
-                _isWalking = false;
+                _isWalking = false; // Reset walking flag
             }
         }
 
-        private void UpdateConsoleTitle()
+        /// <summary>
+        /// Asynchronous command processing loop, reads commands from the console.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task CommandLoopAsync(CancellationToken cancellationToken)
+        {
+            _logger.LogInformation("⌨️ Command loop started. Type 'help' for commands, 'exit' to quit.");
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                string? commandLine = null;
+                try
+                {
+                    commandLine = await Console.In.ReadLineAsync(cancellationToken); // Read command line input asynchronously
+                }
+                catch (OperationCanceledException) { break; }
+                catch (IOException ex) { _logger.LogError(ex, "Error reading command line input (IO)."); break; }
+                catch (Exception ex) { _logger.LogError(ex, "Error reading command line input."); break; }
+
+                if (cancellationToken.IsCancellationRequested || commandLine == null) break;
+
+                await ProcessCommandAsync(commandLine); // Process the entered command
+            }
+            _logger.LogInformation("⌨️ Command loop ended.");
+        }
+
+        /// <summary>
+        /// Processes a single command entered by the user.
+        /// </summary>
+        /// <param name="commandLine">The command line string entered by the user.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task ProcessCommandAsync(string commandLine)
+        {
+            var parts = commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries); // Split command line into parts
+            if (parts.Length == 0) return;
+
+            var command = parts[0].ToLowerInvariant(); // Get the command, convert to lowercase
+            var args = parts.Skip(1).ToArray(); // Get the arguments
+
+            // General commands available in any state
+            switch (command)
+            {
+                case "exit":
+                    _logger.LogInformation("Received 'exit' command. Shutting down...");
+                    _cancellationTokenSource?.Cancel(); // Cancel the client operation
+                    return;
+                case "help":
+                    DisplayHelp(); // Display help information
+                    return;
+            }
+
+            // State-specific commands, handle commands based on the current client state
+            if (_currentState < ClientConnectionState.ConnectingToGameServer)
+            {
+                await HandleConnectServerCommandAsync(command, args); // Handle commands valid in Connect Server state
+            }
+            else if (_currentState >= ClientConnectionState.ConnectedToGameServer)
+            {
+                await HandleGameServerCommandAsync(command, args); // Handle commands valid in Game Server state
+            }
+            else // Disconnected or Initial state
+            {
+                _logger.LogWarning("❓ Not connected. Available commands: 'exit', 'help'.");
+            }
+        }
+
+        /// <summary>
+        /// Handles commands that are valid when connected to the Connect Server.
+        /// </summary>
+        /// <param name="command">The command entered by the user.</param>
+        /// <param name="args">The arguments for the command.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandleConnectServerCommandAsync(string command, string[] args)
+        {
+            switch (command)
+            {
+                case "servers":
+                case "list":
+                    if (_serverList.Count > 0)
+                    {
+                        DisplayServerList(); // Display the server list if available
+                    }
+                    else
+                    {
+                        _logger.LogWarning("No server list available. Use 'refresh'.");
+                    }
+                    break;
+
+                case "refresh":
+                    if (_currentState == ClientConnectionState.ConnectedToConnectServer || _currentState == ClientConnectionState.ReceivedServerList)
+                    {
+                        await RequestServerList(); // Request server list refresh
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Cannot refresh server list, not connected to Connect Server.");
+                    }
+                    break;
+
+                case "connect":
+                    if (_currentState != ClientConnectionState.ReceivedServerList)
+                    {
+                        _logger.LogWarning("Please wait for the server list or use 'refresh'.");
+                        break;
+                    }
+                    if (args.Length != 1 || !int.TryParse(args[0], out int index) || index < 1 || index > _serverList.Count)
+                    {
+                        _logger.LogWarning("Usage: connect <number> (1-{Max})", _serverList.Count);
+                        break;
+                    }
+                    var selectedServer = _serverList[index - 1]; // Get the selected server from the list
+                    await HandleServerSelectionAsync(selectedServer.ServerId); // Handle server selection
+                    break;
+
+                default:
+                    _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Handles commands that are valid when connected to the Game Server and in-game.
+        /// </summary>
+        /// <param name="command">The command entered by the user.</param>
+        /// <param name="args">The arguments for the command.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandleGameServerCommandAsync(string command, string[] args)
+        {
+            switch (command)
+            {
+                case "select":
+                    await HandleSelectCharacterCommandAsync(args); // Handle character selection command
+                    break;
+                case "nearby":
+                case "scope":
+                    Console.WriteLine(_scopeManager.GetScopeListDisplay()); // Display objects in scope
+                    break; // Use ScopeManager display
+                case "move":
+                    await HandleMoveCommandAsync(args); // Handle instant move command
+                    break;
+                case "walkto":
+                    await HandleWalkToCommandAsync(args); // Handle walk to coordinates command
+                    break;
+                case "walk":
+                    await HandleWalkCommandAsync(args); // Handle walk in directions command
+                    break;
+                case "pickup":
+                    await HandlePickupCommandAsync(args); // Handle item pickup command
+                    break;
+                case "stats":
+                    if (!IsInGame)
+                    {
+                        _logger.LogWarning("Cannot display stats - character not in game.");
+                    }
+                    else
+                    {
+                        Console.WriteLine(_characterState.GetStatsDisplay()); // Display character stats
+                    }
+                    break;
+                case "inv":
+                case "inventory":
+                    if (!IsInGame)
+                    {
+                        _logger.LogWarning("Cannot display inventory - character not in game.");
+                    }
+                    else
+                    {
+                        Console.WriteLine(_characterState.GetInventoryDisplay()); // Display character inventory
+                    }
+                    break;
+                case "skills": // NEW COMMAND
+                    if (!IsInGame) _logger.LogWarning("Cannot display skills - character not in game.");
+                    else Console.WriteLine(_characterState.GetSkillListDisplay()); // Display character skills
+                    break;
+                default:
+                    _logger.LogWarning("❓ Unknown command or command not valid in current state ({State}): {Command}", _currentState, command);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Handles the character selection command.
+        /// </summary>
+        /// <param name="args">The arguments for the command (character index).</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandleSelectCharacterCommandAsync(string[] args)
+        {
+            if (_pendingCharacterSelection == null)
+            {
+                _logger.LogWarning("No character list available to select from.");
+                return;
+            }
+            if (args.Length != 1 || !int.TryParse(args[0], out int index) || index < 1 || index > _pendingCharacterSelection.Count)
+            {
+                _logger.LogWarning("Usage: select <number> (1-{Max})", _pendingCharacterSelection.Count);
+                return;
+            }
+
+            // Retrieve the selected character tuple
+            var selectedCharacterInfo = _pendingCharacterSelection[index - 1];
+
+            // Access tuple elements using Item1 and Item2
+            var selectedName = selectedCharacterInfo.Item1;
+            var selectedClass = selectedCharacterInfo.Item2;
+
+            _logger.LogInformation("🎯 Selected character: {Name} ({Class})", selectedName, CharacterClassDatabase.GetClassName(selectedClass));
+
+            // Update CharacterState with selected character info
+            _characterState.Name = selectedName;
+            _characterState.Class = selectedClass; // Set the class
+
+            _currentState = ClientConnectionState.SelectingCharacter;
+            await _characterService.SelectCharacterAsync(selectedName); // Send character selection request
+            _pendingCharacterSelection = null; // Clear pending character selection list
+            UpdateConsoleTitle(); // Update console title to reflect character selection
+        }
+
+
+        /// <summary>
+        /// Handles the instant move command.
+        /// </summary>
+        /// <param name="args">The arguments for the command (X and Y coordinates).</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandleMoveCommandAsync(string[] args)
+        {
+            if (!IsInGame)
+            {
+                _logger.LogWarning("Cannot move - character not in game.");
+                return;
+            }
+            if (_isWalking)
+            {
+                _logger.LogWarning("🚶 Character is currently walking, cannot use 'move'.");
+                return;
+            }
+            if (args.Length == 2 && byte.TryParse(args[0], out byte x) && byte.TryParse(args[1], out byte y))
+            {
+                await _characterService.SendInstantMoveRequestAsync(x, y); // Send instant move request
+            }
+            else
+            {
+                _logger.LogWarning("Invalid 'move' command format. Use: move X Y");
+            }
+        }
+
+        /// <summary>
+        /// Handles the walk to coordinates command. Generates a path and starts the walk sequence.
+        /// </summary>
+        /// <param name="args">The arguments for the command (target X and Y coordinates).</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandleWalkToCommandAsync(string[] args)
+        {
+            if (!IsInGame)
+            {
+                _logger.LogWarning("Cannot walk - character is not in game.");
+                return;
+            }
+            if (_isWalking)
+            {
+                _logger.LogWarning("🚶 Character is already moving, please wait.");
+                return;
+            }
+            if (args.Length == 2 && byte.TryParse(args[0], out byte targetX) && byte.TryParse(args[1], out byte targetY))
+            {
+                byte startX = _characterState.PositionX; // Use CharacterState position as starting point
+                byte startY = _characterState.PositionY; // Use CharacterState position as starting point
+                var generatedPath = GenerateSimplePathTowards(startX, startY, targetX, targetY); // Generate path to target coordinates
+                if (generatedPath.Length > 0)
+                {
+                    await StartWalkSequenceAsync(generatedPath, targetX, targetY); // Start the walk sequence
+                }
+                else
+                {
+                    _logger.LogInformation("🚶 Already at target location or no path.");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Invalid 'walkto' format. Use: walkto X Y");
+            }
+        }
+
+        /// <summary>
+        /// Handles the walk in directions command. Starts a walk sequence based on provided directions.
+        /// </summary>
+        /// <param name="args">The arguments for the command (directions 0-7).</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandleWalkCommandAsync(string[] args)
+        {
+            if (!IsInGame)
+            {
+                _logger.LogWarning("Cannot walk - character is not in game.");
+                return;
+            }
+            if (_isWalking)
+            {
+                _logger.LogWarning("🚶 Character is already moving, please wait.");
+                return;
+            }
+            if (args.Length > 0)
+            {
+                var directions = args.Select(p => byte.TryParse(p, out byte dir) && dir <= 7 ? (byte?)dir : null).Where(d => d.HasValue).Select(d => d.Value).ToArray(); // Parse directions from arguments
+                if (directions.Length > 0)
+                {
+                    await StartWalkSequenceAsync(directions); // Start walk sequence with provided directions
+                }
+                else
+                {
+                    _logger.LogWarning("Invalid 'walk' arguments. Use numeric directions 0-7.");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Invalid 'walk' command format. Use: walk <dir1> [dir2] ...");
+                _logger.LogInformation("Directions: 0:W, 1:SW, 2:S, 3:SE, 4:E, 5:NE, 6:N, 7:NW");
+            }
+        }
+
+        /// <summary>
+        /// Starts a walk sequence by sending animation and walk requests to the server.
+        /// </summary>
+        /// <param name="path">The array of directions for the walk sequence.</param>
+        /// <param name="targetX">Optional target X coordinate for logging purposes.</param>
+        /// <param name="targetY">Optional target Y coordinate for logging purposes.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task StartWalkSequenceAsync(byte[] path, byte? targetX = null, byte? targetY = null)
+        {
+            var translatedPath = path.Select(TranslateDirection).ToArray(); // Translate directions to server directions
+            if (translatedPath.Length == 0) return;
+            _isWalking = true; // Set walking flag to prevent concurrent walk commands
+            try
+            {
+                byte firstTranslatedStep = translatedPath[0];
+                byte animationNumber = 0;
+                _logger.LogDebug("🚶 Sending AnimationRequest before walk. Translated Direction: {Dir}, Anim: {Anim}", firstTranslatedStep, animationNumber);
+                await _characterService.SendAnimationRequestAsync(firstTranslatedStep, animationNumber); // Send animation request
+
+                if (targetX.HasValue && targetY.HasValue)
+                {
+                    _logger.LogDebug("🚶 Sending WalkRequest. Client Position: ({CurrentX},{CurrentY}), Target: ({TargetX},{TargetY}), Original Path: [{OrigPath}], Translated Path: [{TransPath}]", _characterState.PositionX, _characterState.PositionY, targetX.Value, targetY.Value, string.Join(",", path), string.Join(",", translatedPath));
+                }
+                else
+                {
+                    _logger.LogInformation("🚶 Sending WalkRequest packet with start ({StartX},{StartY}), {Steps} steps (translated)...", _characterState.PositionX, _characterState.PositionY, translatedPath.Length);
+                }
+                await _characterService.SendWalkRequestAsync(_characterState.PositionX, _characterState.PositionY, translatedPath); // Send walk request with translated path
+            }
+            catch (OperationCanceledException)
+            {
+                _isWalking = false; // Reset walking flag on cancellation
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during walk sequence.");
+                _isWalking = false; // Reset walking flag on error
+            }
+        }
+
+        /// <summary>
+        /// Handles the item pickup command. Attempts to pick up an item by ID or the nearest item.
+        /// </summary>
+        /// <param name="args">The arguments for the command (item ID or 'near').</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task HandlePickupCommandAsync(string[] args)
+        {
+            if (!IsInGame)
+            {
+                _logger.LogWarning("Cannot pick up item - character not in game.");
+                return;
+            }
+            if (args.Length == 1)
+            {
+                ushort? targetItemIdRaw = null;
+                string inputIdString = args[0];
+                if (inputIdString.Equals("near", StringComparison.OrdinalIgnoreCase))
+                {
+                    targetItemIdRaw = _scopeManager.FindNearestPickupItemRawId(); // Find nearest item in scope
+                    if (!targetItemIdRaw.HasValue)
+                    {
+                        _logger.LogInformation("No nearby items found to pick up.");
+                        return;
+                    }
+                    _logger.LogInformation("👜 Attempting to pick up nearest item (Raw ID {RawId:X4})...", targetItemIdRaw.Value);
+                    await AttemptPickupWithRetryAsync(targetItemIdRaw.Value); // Attempt pickup with retry logic for nearest item
+                }
+                else if (ushort.TryParse(inputIdString, System.Globalization.NumberStyles.HexNumber, null, out ushort itemIdHexRaw))
+                {
+                    targetItemIdRaw = itemIdHexRaw;
+                    _logger.LogInformation("👜 Attempting to pick up item with Raw ID {ItemId:X4} (parsed as hex from input '{Input}')...", targetItemIdRaw.Value, inputIdString);
+                    await SendPickupRequestAsync(targetItemIdRaw.Value); // Send pickup request for item ID (hex input)
+                }
+                else if (ushort.TryParse(inputIdString, out ushort itemIdDecRaw))
+                {
+                    targetItemIdRaw = itemIdDecRaw;
+                    _logger.LogInformation("👜 Attempting to pick up item with Raw ID {ItemId:X4} (parsed as decimal from input '{Input}')...", targetItemIdRaw.Value, inputIdString);
+                    await SendPickupRequestAsync(targetItemIdRaw.Value); // Send pickup request for item ID (decimal input)
+                }
+                else
+                {
+                    _logger.LogWarning("Invalid pickup target '{Target}'. Use: 'pickup near' or 'pickup <ItemID_Hex_Or_Dec>'.", inputIdString);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Invalid 'pickup' command format. Use: 'pickup near' or 'pickup <ItemID>'.");
+            }
+        }
+
+        /// <summary>
+        /// Attempts to pick up an item with retry logic to handle potential packet loss or server delays.
+        /// </summary>
+        /// <param name="targetItemIdRaw">The raw item ID of the item to pick up.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task AttemptPickupWithRetryAsync(ushort targetItemIdRaw)
+        {
+            int attempts = 0;
+            const int maxAttempts = 20;
+            bool pickupSuccess = false;
+            DateTime startTime = DateTime.UtcNow;
+            while (!pickupSuccess && attempts < maxAttempts && (DateTime.UtcNow - startTime).TotalSeconds < 20)
+            {
+                await SendPickupRequestAsync(targetItemIdRaw); // Send pickup request
+                await Task.Delay(1000); // Wait for 1 second before retrying
+                ushort? currentItemId = _scopeManager.FindNearestPickupItemRawId(); // Check if item is still in scope
+                if (!currentItemId.HasValue || currentItemId.Value != targetItemIdRaw)
+                {
+                    pickupSuccess = true;
+                    _logger.LogInformation("✅ Item (Raw ID {RawId:X4}) seems to have been picked up after {Attempts} attempts.", targetItemIdRaw, attempts + 1);
+                }
+                else
+                {
+                    _logger.LogDebug("Attempt {AttemptNum}: Item {RawId:X4} still present.", attempts + 1, targetItemIdRaw);
+                }
+                attempts++;
+            }
+            if (!pickupSuccess) _logger.LogWarning("⚠️ Failed to pick up item (Raw ID {RawId:X4}) after {Attempts} attempts.", targetItemIdRaw, attempts);
+        }
+
+        /// <summary>
+        /// Sends a pickup item request packet to the server.
+        /// </summary>
+        /// <param name="targetItemIdRaw">The raw item ID of the item to pick up.</param>
+        /// <returns>A Task representing the asynchronous operation.</returns>
+        private async Task SendPickupRequestAsync(ushort targetItemIdRaw)
+        {
+            ushort itemIdMasked = (ushort)(targetItemIdRaw & 0x7FFF); // Mask item ID
+            try
+            {
+                await _connectionManager.Connection.SendPickupItemRequestAsync(itemIdMasked); // Send pickup item request packet
+                _logger.LogInformation("✔️ Pickup request sent for RAW ID {RawID:X4}.", targetItemIdRaw);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error while sending pickup packet for Masked ID {MaskedId:X4}.", itemIdMasked);
+            }
+        }
+
+        /// <summary>
+        /// Displays the help message with available commands in the console.
+        /// </summary>
+        private void DisplayHelp()
+        {
+            Console.WriteLine("\n--- Available Commands ---");
+            Console.WriteLine(" General:");
+            Console.WriteLine("  exit          - Closes the application.");
+            Console.WriteLine("  help          - Shows this help message.");
+            Console.WriteLine("\n Connect Server State (< ConnectingToGameServer):");
+            Console.WriteLine("  servers / list - Displays the available server list.");
+            Console.WriteLine("  refresh       - Requests an updated server list.");
+            Console.WriteLine("  connect <num> - Connects to the specified server number from the list.");
+            Console.WriteLine("\n Game Server State (>= ConnectedToGameServer):");
+            Console.WriteLine("  select <num>  - Selects the character by number from the list.");
+            Console.WriteLine("  nearby / scope- Lists objects currently in scope.");
+            Console.WriteLine("  move <x> <y>  - Instantly moves the character to coordinates (X, Y).");
+            Console.WriteLine("  walkto <x> <y>- Walks towards the target coordinates (X, Y).");
+            Console.WriteLine("  walk <d> ...  - Walks a sequence of directions (0-7).");
+            Console.WriteLine("  pickup <id|near> - Picks up an item by Raw ID (hex/dec) or the nearest item.");
+            Console.WriteLine("  stats         - Displays current character statistics.");
+            Console.WriteLine("  inv / inventory - Displays current character inventory.");
+            Console.WriteLine("  skills        - Displays current character skill list."); // Added help text
+            Console.WriteLine("------------------------\n");
+        }
+
+        /// <summary>
+        /// Translates a client-side direction to a server-side direction using the direction map.
+        /// </summary>
+        /// <param name="standardDirection">The client-side standard direction (0-7).</param>
+        /// <returns>The server-side direction, or the original direction if no translation is found.</returns>
+        private byte TranslateDirection(byte standardDirection)
+        {
+            if (_serverDirectionMap.TryGetValue(standardDirection, out byte serverDirection))
+            {
+                _logger.LogTrace("Translating direction {StandardDir} -> {ServerDir}", standardDirection, serverDirection);
+                return serverDirection; // Return translated server direction
+            }
+            _logger.LogWarning("Translation not found for direction {StandardDir}, using original.", standardDirection);
+            return standardDirection; // Return original direction if no translation found
+        }
+
+        /// <summary>
+        /// Generates a simple path towards target coordinates using basic direction logic.
+        /// </summary>
+        /// <param name="startX">The starting X coordinate.</param>
+        /// <param name="startY">The starting Y coordinate.</param>
+        /// <param name="targetX">The target X coordinate.</param>
+        /// <param name="targetY">The target Y coordinate.</param>
+        /// <returns>An array of directions representing the generated path.</returns>
+        private byte[] GenerateSimplePathTowards(byte startX, byte startY, byte targetX, byte targetY)
+        {
+            const int MaxStepsPerPacket = 15; // Maximum steps allowed in a single walk packet
+            var path = new List<byte>(MaxStepsPerPacket);
+            int currentX = startX;
+            int currentY = startY;
+
+            for (int i = 0; i < MaxStepsPerPacket; i++)
+            {
+                int dx = targetX - currentX;
+                int dy = targetY - currentY;
+
+                if (dx == 0 && dy == 0) break; // Reached target, stop path generation
+
+                byte bestDirection = 0xFF; // Invalid direction, default value
+
+                if (Math.Abs(dx) > Math.Abs(dy))
+                {
+                    bestDirection = (dx > 0) ? (byte)4 : (byte)0; // E or W direction based on X difference
+                }
+                else if (Math.Abs(dy) > Math.Abs(dx))
+                {
+                    bestDirection = (dy > 0) ? (byte)2 : (byte)6; // S or N direction based on Y difference
+                }
+                else // Diagonal movement
+                {
+                    if (dx > 0 && dy > 0) bestDirection = 3; // SE
+                    else if (dx < 0 && dy > 0) bestDirection = 1; // SW
+                    else if (dx > 0 && dy < 0) bestDirection = 5; // NE
+                    else if (dx < 0 && dy < 0) bestDirection = 7; // NW
+                }
+
+                if (bestDirection <= 7)
+                {
+                    path.Add(bestDirection); // Add direction to the path
+                    switch (bestDirection) // Update current position based on chosen direction
+                    {
+                        case 0:
+                            currentX--;
+                            break;
+                        case 1:
+                            currentX--;
+                            currentY++;
+                            break;
+                        case 2:
+                            currentY++;
+                            break;
+                        case 3:
+                            currentX++;
+                            currentY++;
+                            break;
+                        case 4:
+                            currentX++;
+                            break;
+                        case 5:
+                            currentX++;
+                            currentY--;
+                            break;
+                        case 6:
+                            currentY--;
+                            break;
+                        case 7:
+                            currentX--;
+                            currentY--;
+                            break;
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Could not determine direction from ({curX},{curY}) to ({tarX},{tarY})", currentX, currentY, targetX, targetY);
+                    break; // Stop path generation if direction cannot be determined
+                }
+            }
+            return path.ToArray(); // Return generated path as byte array
+        }
+
+        /// <summary>
+        /// Sets the in-game status of the character and updates client state and console title accordingly.
+        /// </summary>
+        /// <param name="inGame">True if the character is in-game, false otherwise.</param>
+        public void SetInGameStatus(bool inGame)
+        {
+            bool changed = _characterState.IsInGame != inGame;
+            _characterState.IsInGame = inGame; // Update CharacterState in-game flag
+
+            if (changed)
+            {
+                if (inGame)
+                {
+                    _currentState = ClientConnectionState.InGame; // Update client state to InGame
+                    _logger.LogInformation("🟢 Character is now in-game. You can enter commands (e.g., 'move X Y').");
+                }
+                else
+                {
+                    // If we were in game and now we are not, it means we left the game world.
+                    // Reset state appropriately. If still connected to GS, go back to character selection possibility.
+                    // If disconnected, HandleDisconnectAsync will set state to Disconnected.
+                    if (_connectionManager.IsConnected) // Check if still connected to Game Server
+                    {
+                        _currentState = ClientConnectionState.ConnectedToGameServer; // Set state back to ConnectedToGameServer, ready for character select
+                        _logger.LogInformation("🚪 Character has left the game world (still connected).");
+                    }
+                    else
+                    {
+                        _currentState = ClientConnectionState.Disconnected; // Set state to Disconnected
+                        _logger.LogInformation("🚪 Character has left the game world (disconnected).");
+                    }
+                }
+                UpdateConsoleTitle(); // Update console title to reflect in-game status
+            }
+        }
+
+        /// <summary>
+        /// Updates the console title to display relevant client and character information.
+        /// </summary>
+        public void UpdateConsoleTitle()
         {
             try
             {
+                string className = CharacterClassDatabase.GetClassName(_characterState.Class);
                 string stateInfo = _currentState switch
                 {
-                    ClientConnectionState.InGame => $"HP: {_currentHealth}/{_maximumHealth} | SD: {_currentShield}/{_maximumShield} | Mana: {_currentMana}/{_maximumMana} | AG: {_currentAbility}/{_maximumAbility}",
+                    ClientConnectionState.InGame => $"HP: {_characterState.CurrentHealth}/{_characterState.MaximumHealth} | SD: {_characterState.CurrentShield}/{_characterState.MaximumShield} | Mana: {_characterState.CurrentMana}/{_characterState.MaximumMana} | AG: {_characterState.CurrentAbility}/{_characterState.MaximumAbility}",
                     ClientConnectionState.ReceivedServerList => "Select Server",
                     ClientConnectionState.ConnectedToGameServer => "Select Character",
-                    _ => _currentState.ToString()
+                    ClientConnectionState.SelectingCharacter => "Selecting Character...",
+                    _ => _currentState.ToString() // Default case: display current state as string
                 };
-                Console.Title = $"MU Client - {_characterName} | {stateInfo}";
+                // Include class name in the title
+                Console.Title = $"MU Client - {_characterState.Name} ({className}) | {stateInfo}";
             }
             catch (Exception ex)
             {
@@ -1301,11 +1059,15 @@ namespace MuOnlineConsole
             }
         }
 
+        /// <summary>
+        /// Asynchronously disposes of the client resources.
+        /// </summary>
+        /// <returns>A ValueTask representing the asynchronous operation.</returns>
         public async ValueTask DisposeAsync()
         {
-            _cancellationTokenSource?.Cancel(); // Ensure cancellation is requested
-            await _connectionManager.DisposeAsync();
-            _cancellationTokenSource?.Dispose();
+            _cancellationTokenSource?.Cancel(); // Cancel any ongoing operations
+            await _connectionManager.DisposeAsync(); // Dispose of the connection manager
+            _cancellationTokenSource?.Dispose(); // Dispose of the cancellation token source
             _logger.LogInformation("🛑 Client stopped.");
         }
     }
