@@ -147,7 +147,8 @@ namespace MuOnlineConsole.Core.Models
         /// <inheritdoc />
         public override string ToString()
         {
-            string identifier = string.IsNullOrWhiteSpace(Name) ? $"Type {TypeNumber}" : Name;
+            // Use NpcDatabase to get the name/designation
+            string identifier = NpcDatabase.GetNpcName(this.TypeNumber);
             return $"ID: {Id:X4} (Raw: {RawId:X4}) (NPC: {identifier}) at [{PositionX},{PositionY}]";
         }
     }

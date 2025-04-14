@@ -66,14 +66,12 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 // Determine level based on experience for older versions if needed
                 // Example placeholder: if (_targetVersion <= TargetProtocolVersion.Version097) { level = ExperienceCalculator.GetLevelFromExperience(currentExp); }
 
-
-                _logger.LogInformation("🗺️ Character entered map {MapId} at coordinates ({X},{Y}).", mapId, x, y);
                 _logger.LogInformation("✅ Successfully entered the game world.");
 
                 // Update CharacterState with data FROM THIS PACKET
                 _characterState.UpdatePosition(x, y);
-                _characterState.UpdateMap(mapId);
-                _characterState.UpdateLevelAndExperience(level, currentExp, nextExp, levelUpPoints); // Use determined level
+                _characterState.UpdateMap(mapId); // Update state first
+                _characterState.UpdateLevelAndExperience(level, currentExp, nextExp, levelUpPoints);
                 _characterState.UpdateStats(str, agi, vit, ene, cmd);
                 _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
                 _characterState.UpdateMaximumManaAbility(maxMana, maxAg);
@@ -83,7 +81,11 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateStatus(status, heroState);
                 _characterState.InventoryExpansionState = inventoryExpansion;
 
-                _client.SetInGameStatus(true);
+                // Log map change using the updated state and MapDatabase
+                _logger.LogInformation("🗺️ Entered map: {MapName} ({MapId}) at ({X},{Y}).",
+                                        MapDatabase.GetMapName(_characterState.MapId), _characterState.MapId, _characterState.PositionX, _characterState.PositionY);
+
+                _client.SetInGameStatus(true); // This will log "Entered game world..."
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CharacterInformation packet."); }
             return Task.CompletedTask;

@@ -134,11 +134,17 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🤖 Received AddNpcToScope (S6): {Count} NPC(s).", scopeS6.NpcCount);
                     for (int i = 0; i < scopeS6.NpcCount; i++)
                     {
+                        ushort typeNumber;
+                        byte currentX, currentY;
                         var npc = scopeS6[i];
                         ushort rawIdS6 = npc.Id;
                         ushort maskedIdS6 = (ushort)(rawIdS6 & 0x7FFF);
                         _scopeManager.AddOrUpdateNpcInScope(maskedIdS6, rawIdS6, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber);
-                        _logger.LogInformation("👀 NPC/Monster Type {Type} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npc.TypeNumber, maskedIdS6, npc.CurrentPositionX, npc.CurrentPositionY);
+                        typeNumber = npc.TypeNumber;
+                        currentX = npc.CurrentPositionX;
+                        currentY = npc.CurrentPositionY;
+                        string npcName = NpcDatabase.GetNpcName(typeNumber);
+                        _logger.LogInformation("👀 {NpcDesignation} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npcName, maskedIdS6, currentX, currentY);
                     }
                     break;
                 case TargetProtocolVersion.Version097:
@@ -146,11 +152,17 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🤖 Received AddNpcToScope (0.97): {Count} NPC(s).", scope097.NpcCount);
                     for (int i = 0; i < scope097.NpcCount; i++)
                     {
+                        ushort typeNumber;
+                        byte currentX, currentY;
                         var npc = scope097[i];
                         ushort rawId097 = npc.Id;
                         ushort maskedId097 = (ushort)(rawId097 & 0x7FFF);
                         _scopeManager.AddOrUpdateNpcInScope(maskedId097, rawId097, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber);
-                        _logger.LogInformation("👀 NPC/Monster Type {Type} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npc.TypeNumber, maskedId097, npc.CurrentPositionX, npc.CurrentPositionY);
+                        typeNumber = npc.TypeNumber;
+                        currentX = npc.CurrentPositionX;
+                        currentY = npc.CurrentPositionY;
+                        string npcName = NpcDatabase.GetNpcName(typeNumber);
+                        _logger.LogInformation("👀 {NpcDesignation} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npcName, maskedId097, currentX, currentY);
                     }
                     break;
                 case TargetProtocolVersion.Version075:
@@ -158,11 +170,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🤖 Received AddNpcToScope (0.75): {Count} NPC(s).", scope075.NpcCount);
                     for (int i = 0; i < scope075.NpcCount; i++)
                     {
+                        ushort typeNumber;
+                        byte currentX, currentY;
                         var npc = scope075[i];
                         ushort rawId075 = npc.Id;
                         ushort maskedId075 = (ushort)(rawId075 & 0x7FFF);
                         _scopeManager.AddOrUpdateNpcInScope(maskedId075, rawId075, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber);
-                        _logger.LogInformation("👀 NPC/Monster Type {Type} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npc.TypeNumber, maskedId075, npc.CurrentPositionX, npc.CurrentPositionY);
+                        // Use NpcDatabase for logging
+                        typeNumber = npc.TypeNumber;
+                        currentX = npc.CurrentPositionX;
+                        currentY = npc.CurrentPositionY;
+                        string npcName = NpcDatabase.GetNpcName(typeNumber);
+                        _logger.LogInformation("👀 {NpcDesignation} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npcName, maskedId075, currentX, currentY);
                     }
                     break;
                 default:

@@ -252,7 +252,13 @@ namespace MuOnlineConsole.Client
                     case ScopeObjectType.Npc:
                     case ScopeObjectType.Monster:
                         var npcObject = (NpcScopeObject)scopeObject;
-                        name = !string.IsNullOrWhiteSpace(npcObject.Name) ? npcObject.Name : $"NPC Type {npcObject.TypeNumber}";
+                        // Use NpcDatabase primarily
+                        name = NpcDatabase.GetNpcName(npcObject.TypeNumber);
+                        // Fallback to Name property if DB fails but Name exists (though unlikely needed now)
+                        if (name.StartsWith("Unknown") && !string.IsNullOrWhiteSpace(npcObject.Name))
+                        {
+                            name = npcObject.Name;
+                        }
                         return true;
                     case ScopeObjectType.Item:
                         name = ((ItemScopeObject)scopeObject).ItemDescription;

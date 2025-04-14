@@ -619,7 +619,7 @@ namespace MuOnlineConsole.Client
             var sb = new StringBuilder();
             sb.AppendLine("\n--- Character Stats ---");
             sb.AppendLine($"  Name: {Name} (ID: {Id:X4})");
-            sb.AppendLine($"  Class: {CharacterClassDatabase.GetClassName(Class)}"); // Use Database for class name
+            sb.AppendLine($"  Class: {CharacterClassDatabase.GetClassName(Class)}");
             sb.AppendLine($"  Level: {Level} ({LevelUpPoints} Points)");
             if (MasterLevel > 0)
             {
@@ -630,7 +630,8 @@ namespace MuOnlineConsole.Client
             {
                 sb.AppendLine($"  M.Exp: {MasterExperience:N0} / {MasterExperienceForNextLevel:N0}");
             }
-            sb.AppendLine($"  Map: {MapId} ({PositionX}, {PositionY})");
+            // Use MapDatabase here:
+            sb.AppendLine($"  Map: {MapDatabase.GetMapName(MapId)} ({MapId}) at ({PositionX},{PositionY})");
             sb.AppendLine($"  Status: {Status}, Hero State: {HeroState}");
             sb.AppendLine($"  HP: {CurrentHealth}/{MaximumHealth}");
             sb.AppendLine($"  Mana: {CurrentMana}/{MaximumMana}");
