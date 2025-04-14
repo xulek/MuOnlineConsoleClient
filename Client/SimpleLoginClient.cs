@@ -733,6 +733,7 @@ namespace MuOnlineConsole.Client
 
             _currentState = ClientConnectionState.SelectingCharacter;
             await _characterService.SelectCharacterAsync(selectedName); // Send character selection request
+            _logger.LogInformation("⏳ Entering game world with {Name}...", selectedName); // Log entry attempt
             _pendingCharacterSelection = null; // Clear pending character selection list
             UpdateConsoleTitle(); // Update console title to reflect character selection
         }
@@ -789,6 +790,7 @@ namespace MuOnlineConsole.Client
                 var generatedPath = GenerateSimplePathTowards(startX, startY, targetX, targetY); // Generate path to target coordinates
                 if (generatedPath.Length > 0)
                 {
+                    _logger.LogInformation("🚶 Starting walk from ({StartX},{StartY}) towards ({TargetX},{TargetY})...", startX, startY, targetX, targetY); // Log walk start
                     await StartWalkSequenceAsync(generatedPath, targetX, targetY); // Start the walk sequence
                 }
                 else
@@ -902,7 +904,8 @@ namespace MuOnlineConsole.Client
                         _logger.LogInformation("No nearby items found to pick up.");
                         return;
                     }
-                    _logger.LogInformation("👜 Attempting to pick up nearest item (Raw ID {RawId:X4})...", targetItemIdRaw.Value);
+                    string pickupTargetDesc = _scopeManager.TryGetScopeObjectName(targetItemIdRaw.Value, out var name) ? name : $"Item (RawID {targetItemIdRaw.Value:X4})";
+                    _logger.LogInformation("👜 Attempting to pick up nearest item: {ItemDescription}...", pickupTargetDesc ?? "Unknown Item");
                     await AttemptPickupWithRetryAsync(targetItemIdRaw.Value); // Attempt pickup with retry logic for nearest item
                 }
                 else if (ushort.TryParse(inputIdString, System.Globalization.NumberStyles.HexNumber, null, out ushort itemIdHexRaw))
@@ -936,18 +939,29 @@ namespace MuOnlineConsole.Client
         private async Task AttemptPickupWithRetryAsync(ushort targetItemIdRaw)
         {
             int attempts = 0;
-            const int maxAttempts = 20;
+            const int maxAttempts = 20; // TODO: Make configurable
             bool pickupSuccess = false;
             DateTime startTime = DateTime.UtcNow;
-            while (!pickupSuccess && attempts < maxAttempts && (DateTime.UtcNow - startTime).TotalSeconds < 20)
+            const int retryDelayMs = 1000; // TODO: Make configurable
+            const int timeoutSeconds = 20; // TODO: Make configurable
+
+            while (!pickupSuccess && attempts < maxAttempts && (DateTime.UtcNow - startTime).TotalSeconds < timeoutSeconds)
             {
-                await SendPickupRequestAsync(targetItemIdRaw); // Send pickup request
-                await Task.Delay(1000); // Wait for 1 second before retrying
-                ushort? currentItemId = _scopeManager.FindNearestPickupItemRawId(); // Check if item is still in scope
+                await SendPickupRequestAsync(targetItemIdRaw);
+                await Task.Delay(retryDelayMs); // Wait before checking again
+                ushort? currentItemId = _scopeManager.FindNearestPickupItemRawId();
                 if (!currentItemId.HasValue || currentItemId.Value != targetItemIdRaw)
                 {
-                    pickupSuccess = true;
-                    _logger.LogInformation("✅ Item (Raw ID {RawId:X4}) seems to have been picked up after {Attempts} attempts.", targetItemIdRaw, attempts + 1);
+                    // Check if the specific item we tried to pick up is gone
+                    if (!_scopeManager.ScopeContains((ushort)(targetItemIdRaw & 0x7FFF)))
+                    {
+                        pickupSuccess = true;
+                    }
+                    else
+                    {
+                        // Item still there, or nearest item changed - confusing state, log and retry
+                        _logger.LogDebug("Attempt {AttemptNum}: Item {RawId:X4} still present or nearest changed.", attempts + 1, targetItemIdRaw);
+                    }
                 }
                 else
                 {
@@ -955,7 +969,15 @@ namespace MuOnlineConsole.Client
                 }
                 attempts++;
             }
-            if (!pickupSuccess) _logger.LogWarning("⚠️ Failed to pick up item (Raw ID {RawId:X4}) after {Attempts} attempts.", targetItemIdRaw, attempts);
+
+            if (pickupSuccess)
+            {
+                _logger.LogInformation("✅ Pickup seems successful for item (Raw ID {RawId:X4}) after {Attempts} attempts.", targetItemIdRaw, attempts);
+            }
+            else
+            {
+                _logger.LogWarning("⚠️ Failed to confirm pickup for item (Raw ID {RawId:X4}) after {Attempts} attempts or timeout.", targetItemIdRaw, attempts);
+            }
         }
 
         /// <summary>

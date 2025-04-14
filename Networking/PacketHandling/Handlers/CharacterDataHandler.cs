@@ -67,7 +67,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 // Example placeholder: if (_targetVersion <= TargetProtocolVersion.Version097) { level = ExperienceCalculator.GetLevelFromExperience(currentExp); }
 
 
-                _logger.LogInformation("✔️ Character selected ({Version}): Map {MapId} ({X},{Y})", version, mapId, x, y);
+                _logger.LogInformation("🗺️ Character entered map {MapId} at coordinates ({X},{Y}).", mapId, x, y);
                 _logger.LogInformation("✅ Successfully entered the game world.");
 
                 // Update CharacterState with data FROM THIS PACKET
@@ -92,6 +92,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
         [PacketHandler(0xF3, 0x05)] // CharacterLevelUpdate
         public Task HandleCharacterLevelUpdateAsync(Memory<byte> packet)
         {
+            ushort oldLevel = _characterState.Level; // Store old level before update
             try
             {
                 uint maxHp = 0, maxSd = 0, maxMana = 0, maxAg = 0;
@@ -116,6 +117,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateLevelAndExperience(newLevel, _characterState.Experience, _characterState.ExperienceForNextLevel, levelUpPoints);
                 _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
                 _characterState.UpdateMaximumManaAbility(maxMana, maxAg);
+
+                // Log level up specifically if level increased
+                if (newLevel > oldLevel)
+                {
+                    _logger.LogInformation("🎉 LEVEL UP! Reached level {Level}. You have {Points} points to distribute.", newLevel, levelUpPoints);
+                    Console.WriteLine($"*** LEVEL UP! You are now level {newLevel}! ***");
+                }
+                else // Log even if level didn't change but points/max stats did (e.g., quest reward)
+                {
+                    _logger.LogInformation("📊 Character stats/points updated: Lvl={Lvl}, Pts={Pts}", newLevel, levelUpPoints);
+                }
+
                 _client.UpdateConsoleTitle();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CharacterLevelUpdate (F3, 05)."); }
@@ -267,8 +280,20 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
 
                 if (playerIdMasked == _characterState.Id)
                 {
-                    _characterState.UpdateStatus(_characterState.Status, stateChange.NewState);
-                    _logger.LogInformation("⚖️ Your Hero State changed to {NewState}.", stateChange.NewState);
+                    CharacterHeroState oldState = _characterState.HeroState; // Get old state before update
+                    _characterState.UpdateStatus(_characterState.Status, stateChange.NewState); // Update state
+
+                    // Describe the change more meaningfully
+                    string stateDesc = stateChange.NewState switch
+                    {
+                        CharacterHeroState.Hero => "a Hero",
+                        CharacterHeroState.PlayerKiller1stStage => "a Player Killer (Stage 1)",
+                        CharacterHeroState.PlayerKiller2ndStage => "a Player Killer (Stage 2)",
+                        CharacterHeroState.PlayerKillWarning => "warned for Player Killing",
+                        _ => "Normal"
+                    };
+                    _logger.LogInformation("⚖️ Your status changed to: {StateDescription}", stateDesc);
+
                     _client.UpdateConsoleTitle();
                 }
                 else
@@ -284,6 +309,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
         [PacketHandler(0xF3, 0x06)] // CharacterStatIncreaseResponse
         public Task HandleCharacterStatIncreaseResponseAsync(Memory<byte> packet)
         {
+            ushort oldPoints = _characterState.LevelUpPoints; // Get points before potential change
             try
             {
                 uint maxHp = 0, maxSd = 0, maxMana = 0, maxAg = 0;
@@ -313,10 +339,16 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     if (maxHp > 0) _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
                     if (maxMana > 0) _characterState.UpdateMaximumManaAbility(maxMana, maxAg);
                     _characterState.IncrementStat(attribute, addedAmount); // Update the base stat
-                    _logger.LogInformation("   -> Statistic update succeeded for {Attr}.", attribute);
+
+                    // Assuming LevelUpPoints were reduced by 'addedAmount' on the server
+                    // We don't get the new point count directly in standard packets, so deduce it.
+                    ushort newPoints = (ushort)Math.Max(0, oldPoints - addedAmount);
+                    _characterState.LevelUpPoints = newPoints; // Update local state
+
+                    _logger.LogInformation("➕ Stat point successfully added to {Attribute}. Points left: {Points}", attribute, newPoints);
                     _client.UpdateConsoleTitle();
                 }
-                else { _logger.LogWarning("   -> Statistic update failed for {Attr}.", attribute); }
+                else { _logger.LogWarning("⚠️ Stat point update failed for {Attribute}.", attribute); }
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CharacterStatIncreaseResponse (F3, 06)."); }
             return Task.CompletedTask;
@@ -442,6 +474,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
         [PacketHandler(0xF3, 0x50)] // MasterStatsUpdate
         public Task HandleMasterStatsUpdateAsync(Memory<byte> packet)
         {
+            ushort oldMasterLevel = _characterState.MasterLevel; // Store old level before update
             try
             {
                 uint maxHp = 0, maxSd = 0, maxMana = 0, maxAg = 0;
@@ -466,6 +499,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateMasterLevelAndExperience(masterLevel, masterExp, nextMasterExp, masterPoints); // Update state
                 _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
                 _characterState.UpdateMaximumManaAbility(maxMana, maxAg);
+
+                // Log master level up specifically if level increased
+                if (masterLevel > oldMasterLevel)
+                {
+                    _logger.LogInformation("Ⓜ️ MASTER LEVEL UP! Reached master level {MasterLevel}. You have {Points} master points.", masterLevel, masterPoints);
+                    Console.WriteLine($"*** MASTER LEVEL UP! You are now master level {masterLevel}! ***");
+                }
+                else // Log if only experience/points changed
+                {
+                    _logger.LogInformation("Ⓜ️ Master stats updated: MLvl={Lvl}, MPts={Pts}", masterLevel, masterPoints);
+                }
+
                 _client.UpdateConsoleTitle();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MasterStatsUpdate (F3, 50)."); }

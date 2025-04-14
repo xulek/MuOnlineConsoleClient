@@ -107,7 +107,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0x22, PacketRouter.NoSubCode)] // ItemAddedToInventory (Success case for pickup)
+        [PacketHandler(0x22, 0x01)] // ItemAddedToInventory (Success case for pickup)
         public Task HandleItemAddedToInventoryAsync(Memory<byte> packet)
         {
             byte headerType = packet.Span[0];
@@ -125,7 +125,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.AddOrUpdateInventoryItem(itemAdded.InventorySlot, itemData.ToArray());
 
                 string itemName = ItemDatabase.GetItemName(itemData) ?? "Unknown Item";
-                _logger.LogInformation("✅ Item '{ItemName}' added/updated in inventory slot {Slot}. Packet Type: {HeaderType:X2}", itemName, itemAdded.InventorySlot, headerType);
+                _logger.LogInformation("✅ Picked up '{ItemName}' into inventory slot {Slot}.", itemName, itemAdded.InventorySlot);
 
                 _client.SignalMovementHandledIfWalking();
                 _client.UpdateConsoleTitle();
@@ -145,7 +145,14 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 if (packet.Length < ItemPickUpRequestFailed.Length) { _logger.LogWarning("⚠️ Received ItemPickupFailed packet (0x22, FF) with unexpected length {Length}.", packet.Length); return Task.CompletedTask; }
                 var response = new ItemPickUpRequestFailed(packet);
-                _logger.LogWarning("❌ Item pickup failed: {Reason} ({ReasonValue})", response.FailReason, (byte)response.FailReason);
+                // More descriptive player-facing reason
+                string reasonText = response.FailReason switch
+                {
+                    ItemPickUpRequestFailed.ItemPickUpFailReason.General => "Failed to pick up item.",
+                    ItemPickUpRequestFailed.ItemPickUpFailReason.ItemStacked => "Item stacked (already have similar).", // Clarify stacking
+                    _ => $"Failed to pick up item (Reason Code: {response.FailReason})." // Fallback
+                };
+                _logger.LogWarning("❌ {ReasonText}", reasonText);
                 _client.LastPickupSucceeded = false; _client.PickupHandled = true; _client.SignalMovementHandledIfWalking();
             }
             catch (Exception ex)
@@ -163,6 +170,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 if (packet.Length < ItemRemoved.Length) { _logger.LogWarning("⚠️ Received ItemRemoved packet (0x28) with unexpected length {Length}.", packet.Length); return Task.CompletedTask; }
                 var itemRemoved = new ItemRemoved(packet);
+                // TODO: Ideally, get item name BEFORE removing it from state for a better log message
+                // string itemName = _characterState.GetItemNameBySlot(itemRemoved.InventorySlot) ?? "Unknown Item";
                 _characterState.RemoveInventoryItem(itemRemoved.InventorySlot);
                 _logger.LogInformation("🗑️ Item removed from inventory slot {Slot}.", itemRemoved.InventorySlot);
                 _client.UpdateConsoleTitle();
@@ -178,8 +187,9 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 if (packet.Length < ItemDurabilityChanged.Length) { _logger.LogWarning("⚠️ Received ItemDurabilityChanged packet (0x2A) with unexpected length {Length}.", packet.Length); return Task.CompletedTask; }
                 var duraUpdate = new ItemDurabilityChanged(packet);
-                _logger.LogInformation("🔧 Item durability changed in slot {Slot} to {Durability}. By Consumption: {ByConsumption}", duraUpdate.InventorySlot, duraUpdate.Durability, duraUpdate.ByConsumption);
-
+                // TODO: Get item name for better log message
+                // string itemName = _characterState.GetItemNameBySlot(duraUpdate.InventorySlot) ?? "Unknown Item";
+                _logger.LogInformation("🔧 Item durability in slot {Slot} changed to {Durability}.", duraUpdate.InventorySlot, duraUpdate.Durability);
                 _characterState.UpdateItemDurability(duraUpdate.InventorySlot, duraUpdate.Durability); // Update state
                 // No need to update console title unless durability is shown there
             }

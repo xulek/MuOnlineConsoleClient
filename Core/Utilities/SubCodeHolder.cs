@@ -33,7 +33,8 @@ namespace MuOnlineConsole.Core.Utilities
             MasterSkillLevelUpdate.Code, // F3 - Master skill level update packet
             MasterSkillList.Code, // F3 - Master skill list packet
             MapChanged.Code, // 1C - Map changed packet
-            // Additional codes from ServerToClientPackets.cs and other identified packets with subcodes:
+                             // Additional codes from ServerToClientPackets.cs and other identified packets with subcodes:
+            0x22, // Handling FF/FE/01 for Item Pickup/Money Update
             0xC1, // Friend Add/Delete Response etc. - Friend list and friend actions response packets
             0xC8, // Letter Delete Response - In-game letter delete response packet
             0xCA, // Chat Room Invite Response - Chat room invitation response packet
