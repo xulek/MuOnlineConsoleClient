@@ -107,8 +107,10 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 _characterState.Id = foundCharacterId;
                 _logger.LogInformation("🆔 Character ID set: {CharacterId:X4}", _characterState.Id);
-                _client.UpdateConsoleTitle();
             }
+
+            _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok Scope
+            _client.UpdateConsoleTitle(); // Zaktualizuj tytuł jeśli ID postaci zostało ustawione
         }
 
         [PacketHandler(0x13, PacketRouter.NoSubCode)] // AddNpcToScope
@@ -188,6 +190,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogWarning("❓ Unsupported protocol version ({Version}) for AddNpcToScope.", _targetVersion);
                     break;
             }
+            _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok Scope
         }
 
         [PacketHandler(0x20, PacketRouter.NoSubCode)] // ItemsDropped / MoneyDropped075
@@ -297,6 +300,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 _logger.LogWarning("❓ Unsupported protocol version ({Version}) for ItemsDropped (20).", _targetVersion);
             }
+            _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok Scope
         }
 
         [PacketHandler(0x21, PacketRouter.NoSubCode)] // ItemDropRemoved
@@ -361,6 +365,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogError(ex, "💥 Error processing item removal at index {Index} in ItemDropRemoved (21).", i);
                 }
             }
+            _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok Scope
         }
 
         [PacketHandler(0x2F, PacketRouter.NoSubCode)] // MoneyDroppedExtended
@@ -448,8 +453,10 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🏃‍♂️ Character teleported/moved to ({X}, {Y}) via 0x15", x, y);
                     _characterState.UpdatePosition(x, y);
                     _client.UpdateConsoleTitle();
+                    _client.ViewModel.UpdateCharacterStateDisplay(); // Aktualizuj info o postaci (pozycja)
                     _client.SignalMovementHandled();
                 }
+                _client.ViewModel.UpdateScopeDisplay(); // Aktualizuj widok scope, jeśli chcesz pokazywać pozycje
             }
             catch (Exception ex)
             {
@@ -492,6 +499,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 {
                     _characterState.UpdatePosition(targetX, targetY);
                     _client.UpdateConsoleTitle();
+                    _client.ViewModel.UpdateCharacterStateDisplay(); // Aktualizuj info o postaci (pozycja)
                     if (stepCount == 0)
                     {
                         _logger.LogInformation("🚶‍➡️ Character walk ended/rotated at ({TargetX},{TargetY}) via 0xD4 (Steps=0)", targetX, targetY);
@@ -501,6 +509,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     {
                         _logger.LogInformation("🚶‍➡️ Character walking -> [Server Target:({TargetX},{TargetY})] Steps:{Steps}", targetX, targetY, stepCount);
                     }
+                    _client.ViewModel.UpdateScopeDisplay(); // Aktualizuj widok scope, jeśli chcesz pokazywać pozycje
+
                 }
                 else
                 {
@@ -538,6 +548,9 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 string killedName = _scopeManager.TryGetScopeObjectName(killedIdRaw, out var kdn) ? (kdn ?? "Unknown Object") : "Unknown Object";
                 ushort killedIdMasked = (ushort)(killedIdRaw & 0x7FFF);
 
+                _scopeManager.RemoveObjectFromScope(killedIdMasked); // Usuń z scope
+                _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok scope
+
                 if (killedIdMasked == _characterState.Id)
                 {
                     _logger.LogWarning("💀 YOU DIED! Killed by {KillerName} (ID: {KillerId:X4}).", killerName, killerIdRaw);
@@ -550,6 +563,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("💀 {KilledName} (ID: {KilledId:X4}) died. Killed by {KillerName} (ID: {KillerId:X4}).", killedName, killedIdRaw, killerName, killerIdRaw);
                     _scopeManager.RemoveObjectFromScope(killedIdMasked);
                 }
+                _client.ViewModel.UpdateCharacterStateDisplay(); // Zaktualizuj stan HP/SD w UI
+
             }
             catch (Exception ex)
             {

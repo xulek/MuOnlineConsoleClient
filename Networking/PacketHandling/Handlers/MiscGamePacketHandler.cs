@@ -28,8 +28,19 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
         [PacketHandler(0xF1, 0x00)] // GameServerEntered
         public Task HandleGameServerEnteredAsync(Memory<byte> packet)
         {
-            _logger.LogInformation("➡️🚪 Received GameServerEntered (F1, 00). Requesting Login...");
-            _client.SendLoginRequest();
+            try // Dodaj try-catch dla bezpieczeństwa
+            {
+                var entered = new GameServerEntered(packet); // Możesz odczytać dane, jeśli potrzebujesz
+                _logger.LogInformation("➡️🚪 Received GameServerEntered (F1, 00) from GS (PlayerID: {PlayerId}). Requesting Login...", entered.PlayerId);
+                // Wywołaj SendLoginRequest w kliencie
+                _client.SendLoginRequest();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "💥 Error processing GameServerEntered (F1, 00).");
+                // Możesz rozważyć ustawienie stanu na błąd lub rozłączenie
+                _client.ViewModel.AddLogMessage("Error processing server welcome packet.", LogLevel.Error);
+            }
             return Task.CompletedTask;
         }
 

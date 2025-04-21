@@ -31,6 +31,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 UpdateInventoryFromPacket(packet); // Call helper to update CharacterState
                 _client.UpdateConsoleTitle(); // Update title after inventory changes
+                _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
             }
             catch (Exception ex)
             {
@@ -85,6 +86,9 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _logger.LogDebug($"  -> Slot {itemSlot}: {ItemDatabase.GetItemName(itemData.Span) ?? "Unknown Item"} (DataLen: {itemDataSize})");
                 currentOffset += storedItemSize;
             }
+
+            _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
+            _client.ViewModel.UpdateCharacterStateDisplay(); // Zaktualizuj też tytuł okna i inne info zależne od stanu
         }
 
         [PacketHandler(0x22, 0xFE)] // InventoryMoneyUpdate
@@ -95,9 +99,11 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 if (packet.Length < InventoryMoneyUpdate.Length) { _logger.LogWarning("⚠️ Received InventoryMoneyUpdate packet (0x22, FE) with unexpected length {Length}.", packet.Length); return Task.CompletedTask; }
                 var moneyUpdate = new InventoryMoneyUpdate(packet);
                 _logger.LogInformation("💰 Inventory Money Updated: {Amount} Zen.", moneyUpdate.Money);
-                _characterState.UpdateInventoryZen(moneyUpdate.Money);
-                _client.SignalMovementHandledIfWalking();
                 _client.UpdateConsoleTitle();
+                _characterState.UpdateInventoryZen(moneyUpdate.Money);
+                _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
+                _client.SignalMovementHandledIfWalking();
+                _client.ViewModel.UpdateCharacterStateDisplay(); // Zaktualizuj tytuł itp.
             }
             catch (Exception ex)
             {
@@ -129,6 +135,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
 
                 _client.SignalMovementHandledIfWalking();
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
+                _client.ViewModel.UpdateCharacterStateDisplay();
             }
             catch (Exception ex)
             {
@@ -174,6 +182,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 // string itemName = _characterState.GetItemNameBySlot(itemRemoved.InventorySlot) ?? "Unknown Item";
                 _characterState.RemoveInventoryItem(itemRemoved.InventorySlot);
                 _logger.LogInformation("🗑️ Item removed from inventory slot {Slot}.", itemRemoved.InventorySlot);
+                _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
+                _client.ViewModel.UpdateCharacterStateDisplay();
                 _client.UpdateConsoleTitle();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ItemRemoved (0x28)."); }
@@ -191,7 +201,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 // string itemName = _characterState.GetItemNameBySlot(duraUpdate.InventorySlot) ?? "Unknown Item";
                 _logger.LogInformation("🔧 Item durability in slot {Slot} changed to {Durability}.", duraUpdate.InventorySlot, duraUpdate.Durability);
                 _characterState.UpdateItemDurability(duraUpdate.InventorySlot, duraUpdate.Durability); // Update state
-                // No need to update console title unless durability is shown there
+                _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ItemDurabilityChanged (0x2A)."); }
             return Task.CompletedTask;
@@ -216,6 +226,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 else { _logger.LogWarning("⚠️ Unexpected length ({Length}) for ItemConsumptionFailed packet (26, FD).", packet.Length); return Task.CompletedTask; }
                 _logger.LogWarning("❗ Item consumption failed. Current HP: {HP}, SD: {SD}", currentHp, currentSd);
                 _characterState.UpdateCurrentHealthShield(currentHp, currentSd);
+                _client.ViewModel.UpdateInventoryDisplay(); // Odśwież widok Inventory
+                _client.ViewModel.UpdateStatsDisplay();
                 _client.UpdateConsoleTitle();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ItemConsumptionFailed (26, FD)."); }

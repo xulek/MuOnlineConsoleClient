@@ -84,7 +84,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 // Log map change using the updated state and MapDatabase
                 _logger.LogInformation("🗺️ Entered map: {MapName} ({MapId}) at ({X},{Y}).",
                                         MapDatabase.GetMapName(_characterState.MapId), _characterState.MapId, _characterState.PositionX, _characterState.PositionY);
-
+                _client.ViewModel.UpdateStatsDisplay(); // Powiadom ViewModel
                 _client.SetInGameStatus(true); // This will log "Entered game world..."
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CharacterInformation packet."); }
@@ -132,6 +132,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 }
 
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay(); // Powiadom ViewModel
+
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CharacterLevelUpdate (F3, 05)."); }
             return Task.CompletedTask;
@@ -159,6 +161,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateCurrentHealthShield(currentHp, currentSd);
                 if (updatedManaAbility) _characterState.UpdateCurrentManaAbility(currentMana, currentAbility);
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay(); // Użyj dedykowanej metody
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CurrentHealthShield (26, FF)."); }
             return Task.CompletedTask;
@@ -186,6 +189,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
                 if (updatedManaAbility) _characterState.UpdateMaximumManaAbility(maxMana, maxAbility);
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay(); // Powiadom ViewModel
+
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MaximumHealthShield (26, FE)."); }
             return Task.CompletedTask;
@@ -213,6 +218,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateCurrentManaAbility(currentMana, currentAbility);
                 if (updatedHealthShield) _characterState.UpdateCurrentHealthShield(currentHp, currentSd);
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing CurrentManaAndAbility (27, FF)."); }
             return Task.CompletedTask;
@@ -240,6 +246,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 _characterState.UpdateMaximumManaAbility(maxMana, maxAbility);
                 if (updatedHealthShield) _characterState.UpdateMaximumHealthShield(maxHp, maxSd);
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MaximumManaAndAbility (27, FE)."); }
             return Task.CompletedTask;
@@ -267,6 +274,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
 
                 _characterState.AddExperience(addedExperience);
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing ExperienceGained (16)."); }
             return Task.CompletedTask;
@@ -297,6 +305,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("⚖️ Your status changed to: {StateDescription}", stateDesc);
 
                     _client.UpdateConsoleTitle();
+                    _client.ViewModel.UpdateStatsDisplay();
                 }
                 else
                 {
@@ -349,6 +358,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
 
                     _logger.LogInformation("➕ Stat point successfully added to {Attribute}. Points left: {Points}", attribute, newPoints);
                     _client.UpdateConsoleTitle();
+                    _client.ViewModel.UpdateStatsDisplay(); // Powiadom ViewModel
                 }
                 else { _logger.LogWarning("⚠️ Stat point update failed for {Attribute}.", attribute); }
             }
@@ -408,6 +418,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             if (skillId > 0)
             {
                 _characterState.AddOrUpdateSkill(new SkillEntryState { SkillId = skillId, SkillLevel = skillLevel });
+                _client.ViewModel.UpdateSkillsDisplay(); // Odśwież widok Skills
             }
         }
 
@@ -435,6 +446,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             if (skillId > 0)
             {
                 _characterState.RemoveSkill(skillId);
+                _client.ViewModel.UpdateSkillsDisplay(); // Odśwież widok Skills
             }
         }
 
@@ -471,6 +483,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     }
                     break;
             }
+            _client.ViewModel.UpdateSkillsDisplay(); // Odśwież widok Skills
+
         }
 
         [PacketHandler(0xF3, 0x50)] // MasterStatsUpdate
@@ -514,6 +528,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 }
 
                 _client.UpdateConsoleTitle();
+                _client.ViewModel.UpdateStatsDisplay();
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MasterStatsUpdate (F3, 50)."); }
             return Task.CompletedTask;
@@ -541,6 +556,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                         NextDisplayValue = update.DisplayValueOfNextLevel
                     });
                     _client.UpdateConsoleTitle(); // Update title as points changed
+                    _client.ViewModel.UpdateSkillsDisplay(); // Odśwież widok Skills
+                    _client.ViewModel.UpdateCharacterStateDisplay(); // Zaktualizuj też punkty master w tytule itp.
                 }
             }
             catch (Exception ex) { _logger.LogError(ex, "💥 Error parsing MasterSkillLevelUpdate (F3, 52)."); }

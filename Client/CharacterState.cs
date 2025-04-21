@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MUnique.OpenMU.Network.Packets;
@@ -644,6 +645,31 @@ namespace MuOnlineConsole.Client
             sb.AppendLine($"  Command: {Leadership}");
             sb.AppendLine("-----------------------\n");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Gets a read-only dictionary representation of the current inventory items.
+        /// Key is the slot number, Value is the raw item data.
+        /// </summary>
+        /// <returns>A read-only dictionary of inventory items.</returns>
+        public IReadOnlyDictionary<byte, byte[]> GetInventoryItems()
+        {
+            // Zwróć kopię lub widok tylko do odczytu dla bezpieczeństwa wątków
+            // ToList().ToDictionary() tworzy nową kolekcję.
+            return new ReadOnlyDictionary<byte, byte[]>(_inventoryItems.ToDictionary(kv => kv.Key, kv => kv.Value));
+        }
+
+        /// <summary>
+        /// Formats item data from a specific slot into a display string.
+        /// </summary>
+        /// <param name="slot">The inventory slot number.</param>
+        /// <param name="itemData">The raw item data.</param>
+        /// <returns>A formatted string representing the item.</returns>
+        public string FormatInventoryItem(byte slot, byte[] itemData)
+        {
+            string itemName = ItemDatabase.GetItemName(itemData) ?? "Unknown Item";
+            string itemDetails = ParseItemDetails(itemData); // Użyj istniejącej metody
+            return $"Slot {slot,3}: {itemName}{itemDetails}";
         }
 
         /// <summary>

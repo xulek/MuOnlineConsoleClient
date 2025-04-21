@@ -1,0 +1,140 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MuOnlineConsole.GUI.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:converters="using:MuOnlineConsole.GUI.Converters"
+        xmlns:clientEnums="using:MuOnlineConsole.Client"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        x:Class="MuOnlineConsole.GUI.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding WindowTitle}">
+
+    <Design.DataContext>
+      <vm:MainWindowViewModel DesignMode="True"/>
+    </Design.DataContext>
+
+  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
+    <!-- Menu/Info Area (Top) -->
+    <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="10" Margin="5">
+       <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center"/>
+       <TextBlock Text="|" VerticalAlignment="Center"/>
+       <TextBlock Text="{Binding CharacterInfo}" VerticalAlignment="Center"/>
+    </StackPanel>
+
+    <!-- Main Content (Chat/Log/Scope/Lists) -->
+    <TabControl Grid.Row="1" Grid.Column="0" Margin="5">
+        <TabItem Header="Log/Chat">
+             <!-- Dodaj CheckBox NAD ScrollViewer -->
+             <DockPanel LastChildFill="True">
+                 <CheckBox DockPanel.Dock="Top" Margin="2"
+                           Content="Auto-scroll"
+                           IsChecked="{Binding IsAutoScrollEnabled}"/>
+                 <ScrollViewer VerticalScrollBarVisibility="Auto" x:Name="LogScrollViewer"> <!-- Nadaj nazwę -->
+                     <ItemsControl ItemsSource="{Binding LogMessages}">
+                         <ItemsControl.ItemTemplate>
+                             <DataTemplate>
+                                 <TextBlock Text="{Binding}" Margin="2" TextWrapping="Wrap"/>
+                             </DataTemplate>
+                         </ItemsControl.ItemTemplate>
+                     </ItemsControl>
+                 </ScrollViewer>
+             </DockPanel>
+        </TabItem>
+         <TabItem Header="Scope">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding ScopeItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" Margin="2"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </TabItem>
+        <TabItem Header="Inventory">
+             <ScrollViewer VerticalScrollBarVisibility="Auto">
+                 <ItemsControl ItemsSource="{Binding InventoryItems}">
+                     <ItemsControl.ItemTemplate>
+                         <DataTemplate>
+                             <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/>
+                         </DataTemplate>
+                     </ItemsControl.ItemTemplate>
+                 </ItemsControl>
+             </ScrollViewer>
+        </TabItem>
+        <TabItem Header="Skills">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding SkillItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </TabItem>
+         <TabItem Header="Servers">
+             <ListBox ItemsSource="{Binding ServerList}" SelectedItem="{Binding SelectedServer}">
+                 <ListBox.ItemTemplate>
+                     <DataTemplate>
+                         <TextBlock Text="{Binding DisplayText}" />
+                     </DataTemplate>
+                 </ListBox.ItemTemplate>
+             </ListBox>
+         </TabItem>
+          <TabItem Header="Characters">
+              <ListBox ItemsSource="{Binding CharacterList}" SelectedItem="{Binding SelectedCharacter}">
+                  <ListBox.ItemTemplate>
+                      <DataTemplate>
+                          <TextBlock Text="{Binding DisplayText}" />
+                      </DataTemplate>
+                  </ListBox.ItemTemplate>
+              </ListBox>
+          </TabItem>
+    </TabControl>
+
+<!-- Stats/Actions Area (Right) -->
+<StackPanel Grid.Row="1" Grid.Column="1" Margin="5" Width="200" Spacing="5">
+    <TextBlock Text="Stats" FontWeight="Bold"/>
+    <TextBlock Text="{Binding CharacterStatsDisplay}" TextWrapping="Wrap"/>
+
+    <TextBlock Text="Actions" FontWeight="Bold" Margin="0,10,0,0"/>
+
+    <!-- Przycisk Connect Server (istniejący) -->
+    <Button Content="Connect Server" Command="{Binding ConnectServerCommand}" IsVisible="{Binding CanConnectServer}"/>
+
+    <!-- Przyciski Server List -->
+    <StackPanel IsVisible="{Binding CanInteractWithServerList}"> <!-- Nowa właściwość CanInteractWithServerList -->
+        <Button Content="Refresh Servers" Command="{Binding RefreshServersCommand}" Margin="0,5,0,0"/>
+        <Button Content="Connect Game Server" Command="{Binding ConnectGameServerCommand}" IsEnabled="{Binding SelectedServer, Converter={x:Static ObjectConverters.IsNotNull}}" Margin="0,5,0,0"/>
+        <!-- IsEnabled zamiast IsVisible dla przycisku Connect GS, aby pokazać, że trzeba wybrać serwer -->
+    </StackPanel>
+
+     <!-- Przycisk Select Character -->
+     <!-- IsVisible kontroluje, czy w ogóle pokazać przycisk (np. tylko gdy połączono z GS) -->
+     <!-- IsEnabled jest kontrolowane przez CanExecute komendy (która sprawdza, czy coś jest wybrane) -->
+    <Button Content="Select Character"
+            Command="{Binding SelectCharacterCommand}"
+            IsVisible="{Binding Path=CurrentState, Converter={x:Static converters:ObjectConverters.IsEqual}, ConverterParameter={x:Static clientEnums:ClientConnectionState.ConnectedToGameServer}}"
+            IsEnabled="{Binding SelectedCharacter, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+            Margin="0,5,0,0"/>
+
+    <!-- Przyciski In-Game (istniejące) -->
+    <StackPanel IsVisible="{Binding IsInGame}">
+         <Button Content="Pickup Nearest" Command="{Binding PickupNearestCommand}" Margin="0,10,0,0"/>
+         <Button Content="Show Stats" Command="{Binding ShowStatsCommand}" Margin="0,5,0,0"/>
+         <Button Content="Show Inventory" Command="{Binding ShowInventoryCommand}" Margin="0,5,0,0"/>
+         <Button Content="Show Skills" Command="{Binding ShowSkillsCommand}" Margin="0,5,0,0"/>
+         <!-- Możesz dodać więcej przycisków dla walk, itp. -->
+     </StackPanel>
+
+</StackPanel>
+
+    <!-- Input Area (Bottom) -->
+    <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" LastChildFill="True" Margin="5">
+        <Button DockPanel.Dock="Right" Content="Send" Command="{Binding SendInputCommand}" CommandParameter="{Binding InputText}"/>
+        <TextBox Text="{Binding InputText}" Watermark="Enter command..." KeyDown="InputTextBox_KeyDown"/>
+    </DockPanel>
+  </Grid>
+</Window>

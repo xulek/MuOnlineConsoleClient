@@ -23,11 +23,11 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
         // Note: These handlers are registered manually in PacketRouter for now.
         // If using attributes, they would need a way to specify Connect Server context.
 
-        public Task HandleHelloAsync(Memory<byte> packet)
+        public async Task HandleHelloAsync(Memory<byte> packet) // Zmień sygnaturę na async Task
         {
             _logger.LogInformation("👋 Received Hello from Connect Server.");
-            _ = Task.Run(() => _client.RequestServerList());
-            return Task.CompletedTask;
+            // Bezpośrednie wywołanie, ponieważ HandleHelloAsync jest już 'awaitable'
+            await _client.RequestServerList();
         }
 
         public Task HandleServerListResponseAsync(Memory<byte> packet)
