@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Media;
 using Avalonia.Threading; // For Dispatcher
 using CommunityToolkit.Mvvm.ComponentModel; // Zamiast ręcznej implementacji INotifyPropertyChanged
 using CommunityToolkit.Mvvm.Input; // Dla RelayCommand
@@ -42,24 +44,28 @@ namespace MuOnlineConsole.GUI.ViewModels
         private readonly CharacterState _characterState; // Przechowuj stan postaci
         private readonly ScopeManager _scopeManager; // Przechowuj menedżera zasięgu
 
-        // Kolekcje dla UI (użyj ObservableCollection dla automatycznych aktualizacji)
-        [ObservableProperty] // Atrybut generujący właściwość z powiadomieniem
-        private ObservableCollection<string> _logMessages = new();
+        // --- Kolekcje dla UI ---
+        [ObservableProperty] private ObservableCollection<string> _logMessages = new();
+        [ObservableProperty] private ObservableCollection<ServerInfoViewModel> _serverList = new();
+        [ObservableProperty] private ObservableCollection<CharacterInfoViewModel> _characterList = new();
+        [ObservableProperty] private ObservableCollection<string> _scopeItems = new();
+        [ObservableProperty] private ObservableCollection<string> _inventoryItems = new();
+        [ObservableProperty] private ObservableCollection<string> _skillItems = new();
+        [ObservableProperty] private ObservableCollection<KeyValuePair<string, string>> _characterStatsList = new(); // NOWA: Dla zakładki Stats
 
+        // --- Kolekcja dla Mapy ---
         [ObservableProperty]
-        private ObservableCollection<ServerInfoViewModel> _serverList = new();
+        private ObservableCollection<MapObjectViewModel> _mapObjects = new();
+        // Słownik do szybkiego wyszukiwania obiektów na mapie po ID
+        private readonly ConcurrentDictionary<ushort, MapObjectViewModel> _mapObjectDictionary = new();
 
-        [ObservableProperty]
-        private ObservableCollection<CharacterInfoViewModel> _characterList = new();
-
-        [ObservableProperty]
-        private ObservableCollection<string> _scopeItems = new(); // Przechowuje sformatowane stringi dla uproszczenia
-
-        [ObservableProperty]
-        private ObservableCollection<string> _inventoryItems = new(); // Przechowuje sformatowane stringi
-
-        [ObservableProperty]
-        private ObservableCollection<string> _skillItems = new(); // Przechowuje sformatowane stringi
+        // --- Skalowanie Mapy ---
+        [ObservableProperty] private double _mapScale = 10.0; // Początkowe powiększenie (np. 10px na koordynatę)
+        [ObservableProperty] private double _mapOffsetX = 0;
+        [ObservableProperty] private double _mapOffsetY = 0;
+        private const double MaxMapScale = 30.0;
+        private const double MinMapScale = 1.0;
+        private const double ScaleStep = 1.2;
 
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(WindowTitle))]
@@ -86,13 +92,13 @@ namespace MuOnlineConsole.GUI.ViewModels
         [ObservableProperty]
         private string _inputText = string.Empty; // Tekst wprowadzany przez użytkownika
 
-        // Właściwości bindowane do UI
+        // --- Właściwości Bindowane ---
         public string WindowTitle => $"MU Console Client - {(_characterState?.Name ?? "No Character")} ({CharacterClassDatabase.GetClassName(_characterState?.Class ?? CharacterClassNumber.DarkWizard)}) - {CurrentState}";
         public string ConnectionStatus => $"State: {CurrentState}";
         public string CharacterInfo => IsInGame ? $"Char: {_characterState.Name}, Lvl: {_characterState.Level} ({_characterState.MasterLevel}), Map: {MapDatabase.GetMapName(_characterState.MapId)} ({_characterState.PositionX},{_characterState.PositionY})" : "Not In Game";
-        public string CharacterStatsDisplay => _characterState != null && IsInGame
-                                               ? _characterState.GetStatsDisplay()
-                                               : "N/A (Not In Game)";
+        // CharacterStatsDisplay może pozostać dla prawej kolumny, jeśli chcesz
+        public string CharacterStatsDisplay => IsInGame ? _characterState.GetStatsDisplay() : "N/A";
+
         public bool CanConnectServer => CurrentState == ClientConnectionState.Initial || CurrentState == ClientConnectionState.Disconnected;
         public bool CanRefreshServers => CurrentState == ClientConnectionState.ConnectedToConnectServer || CurrentState == ClientConnectionState.ReceivedServerList;
         public bool CanConnectGameServer => SelectedServer != null && CurrentState == ClientConnectionState.ReceivedServerList;
@@ -129,6 +135,16 @@ namespace MuOnlineConsole.GUI.ViewModels
                 _logger = new LoggerFactory().CreateLogger<MainWindowViewModel>();
                 _characterState = new CharacterState(new LoggerFactory()); // Utwórz pusty stan
                 _scopeManager = new ScopeManager(new LoggerFactory(), _characterState);
+
+                // Przykładowe dane dla zakładki Stats
+                _characterStatsList.Add(new KeyValuePair<string, string>("HP", "100 / 100"));
+                _characterStatsList.Add(new KeyValuePair<string, string>("Mana", "50 / 50"));
+                _characterStatsList.Add(new KeyValuePair<string, string>("Strength", "25"));
+                // Przykładowe dane dla mapy
+                // _mapObjects.Add(new MapObjectViewModel { MapX = 120 * MapScale, MapY = 130 * MapScale, Color = Brushes.Yellow, ToolTipText = "Self @ (120,130)", Size = 8 });
+                // _mapObjects.Add(new MapObjectViewModel { MapX = 125 * MapScale, MapY = 135 * MapScale, Color = Brushes.Red, ToolTipText = "OtherPlayer @ (125,135)" });
+                // _mapObjects.Add(new MapObjectViewModel { MapX = 110 * MapScale, MapY = 110 * MapScale, Color = Brushes.LightBlue, ToolTipText = "Guard @ (110,110)" });
+
             }
             else
             {
@@ -357,17 +373,223 @@ namespace MuOnlineConsole.GUI.ViewModels
 
         public void UpdateStatsDisplay()
         {
-            // Upewnij się, że działasz w wątku UI
             Dispatcher.UIThread.InvokeAsync(() =>
             {
-                // Powiadom UI, że wartość właściwości, do której jest zbindowany TextBlock, uległa zmianie.
-                // UI ponownie odczyta jej wartość, wywołując getter, który pobierze aktualne dane z _characterState.GetStatsDisplay().
-                OnPropertyChanged(nameof(CharacterStatsDisplay));
-
-                // Możesz też tutaj zaktualizować tytuł okna, jeśli zawiera statystyki
-                OnPropertyChanged(nameof(CharacterInfo)); // Jeśli CharacterInfo zawiera statystyki
-                OnPropertyChanged(nameof(WindowTitle)); // Jeśli tytuł zawiera statystyki
+                CharacterStatsList.Clear();
+                if (IsInGame)
+                {
+                    var stats = _characterState.GetFormattedStatsList();
+                    foreach (var stat in stats)
+                    {
+                        CharacterStatsList.Add(stat);
+                    }
+                }
+                // Powiadom też inne właściwości zależne od statystyk
+                OnPropertyChanged(nameof(CharacterInfo));
+                OnPropertyChanged(nameof(WindowTitle));
+                OnPropertyChanged(nameof(CharacterStatsDisplay)); // Nadal aktualizuj podgląd w prawej kolumnie
             });
+        }
+
+        public void AddOrUpdateMapObject(ScopeObject scopeObject)
+        {
+            if (scopeObject == null) return;
+
+            // Log BEFORE InvokeAsync
+            _logger.LogDebug("--> VM.AddOrUpdate: Received ScopeObject ID={Id:X4}, Type={Type}, OriginalPos=({X},{Y}). Current MapScale={Scale:F2}",
+                scopeObject.Id, scopeObject.ObjectType, scopeObject.PositionX, scopeObject.PositionY, MapScale);
+
+            Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                // Log INSIDE InvokeAsync
+                _logger.LogTrace("  -> VM.AddOrUpdate (UI Thread): Processing ID={Id:X4}", scopeObject.Id);
+                if (_mapObjectDictionary.TryGetValue(scopeObject.Id, out var existingMapObject))
+                {
+                    // Log BEFORE calling UpdatePosition
+                    _logger.LogTrace("    -> Updating existing MapObjectViewModel ID={Id:X4} with Pos=({X},{Y}), Scale={Scale:F2}",
+                        scopeObject.Id, scopeObject.PositionX, scopeObject.PositionY, MapScale);
+                    existingMapObject.UpdatePosition(scopeObject.PositionX, scopeObject.PositionY, MapScale);
+                    // Log the result AFTER calling UpdatePosition
+                    _logger.LogTrace("      -> After UpdatePosition: MapX={MapX:F2}, MapY={MapY:F2}", existingMapObject.MapX, existingMapObject.MapY);
+                }
+                else
+                {
+                    // Log BEFORE creating/updating
+                    _logger.LogTrace("    -> Creating new MapObjectViewModel for ID={Id:X4} with Pos=({X},{Y}), Scale={Scale:F2}",
+                        scopeObject.Id, scopeObject.PositionX, scopeObject.PositionY, MapScale);
+
+                    var newMapObject = CreateMapObjectViewModel(scopeObject); // Creates and sets initial OriginalX/Y
+                    if (newMapObject != null)
+                    {
+                        // Explicitly update position WITH SCALE *after* creation and *before* adding
+                        newMapObject.UpdatePosition(scopeObject.PositionX, scopeObject.PositionY, MapScale);
+
+                        if (_mapObjectDictionary.TryAdd(scopeObject.Id, newMapObject))
+                        {
+                            MapObjects.Add(newMapObject);
+                            // Log AFTER adding and updating
+                            _logger.LogTrace("      -> After Create/Add: MapX={MapX:F2}, MapY={MapY:F2}", newMapObject.MapX, newMapObject.MapY);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("    -> Failed to add MapObjectViewModel ID={Id:X4} to dictionary (already exists?).", scopeObject.Id);
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("    -> Failed to create MapObjectViewModel for ID={Id:X4}", scopeObject.Id);
+                    }
+                }
+            });
+        }
+
+        public double MapWidth => 255 * MapScale;
+        public double MapHeight => 255 * MapScale;
+
+        partial void OnMapScaleChanged(double oldValue, double newValue)
+        {
+            OnPropertyChanged(nameof(MapWidth));
+            OnPropertyChanged(nameof(MapHeight));
+            UpdateAllMapObjectScales();
+        }
+
+        public void RemoveMapObject(ushort maskedId)
+        {
+            Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (_mapObjectDictionary.TryRemove(maskedId, out var mapObjectToRemove))
+                {
+                    MapObjects.Remove(mapObjectToRemove);
+                }
+            });
+        }
+
+        public void UpdateMapObjectPosition(ushort maskedId, byte x, byte y)
+        {
+            // Log BEFORE InvokeAsync
+            _logger.LogDebug("--> VM.UpdatePosition: Received ID={Id:X4}, NewPos=({X},{Y}). Current MapScale={Scale:F2}",
+                maskedId, x, y, MapScale);
+
+            Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                // Log INSIDE InvokeAsync
+                _logger.LogTrace("  -> VM.UpdatePosition (UI Thread): Processing ID={Id:X4}", maskedId);
+                if (_mapObjectDictionary.TryGetValue(maskedId, out var mapObject))
+                {
+                    // Log BEFORE calling UpdatePosition
+                    _logger.LogTrace("    -> Calling UpdatePosition on MapObjectViewModel ID={Id:X4} with Pos=({X},{Y}), Scale={Scale:F2}",
+                        maskedId, x, y, MapScale);
+                    mapObject.UpdatePosition(x, y, MapScale);
+                    // Log the result AFTER calling UpdatePosition
+                    _logger.LogTrace("      -> After UpdatePosition: MapX={MapX:F2}, MapY={MapY:F2}", mapObject.MapX, mapObject.MapY);
+                }
+                else
+                {
+                    _logger.LogWarning("    -> MapObjectViewModel not found for ID {Id:X4} during position update.", maskedId);
+                }
+            });
+        }
+
+        public void ClearMapObjects(bool clearSelf = false)
+        {
+            Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (clearSelf || _characterState.Id == 0xFFFF)
+                {
+                    MapObjects.Clear();
+                    _mapObjectDictionary.Clear();
+                }
+                else
+                {
+                    if (_mapObjectDictionary.TryGetValue(_characterState.Id, out var self))
+                    {
+                        MapObjects.Clear();
+                        _mapObjectDictionary.Clear();
+                        MapObjects.Add(self); // Dodaj siebie z powrotem
+                        _mapObjectDictionary.TryAdd(self.Id, self);
+                    }
+                    else
+                    {
+                        MapObjects.Clear();
+                        _mapObjectDictionary.Clear();
+                    }
+                }
+            });
+        }
+
+
+        private MapObjectViewModel? CreateMapObjectViewModel(ScopeObject scopeObject)
+        {
+            string toolTipBase = "";
+            IBrush color = Brushes.Gray;
+            MapObjectType mapType = MapObjectType.Unknown;
+            double size = 5;
+
+            switch (scopeObject)
+            {
+                case PlayerScopeObject p:
+                    if (p.Id == _characterState.Id) { mapType = MapObjectType.PlayerSelf; color = Brushes.Yellow; size = 8; toolTipBase = $"You ({p.Name})"; }
+                    else { mapType = MapObjectType.PlayerOther; color = Brushes.White; toolTipBase = $"Player ({p.Name})"; }
+                    break;
+                case NpcScopeObject n:
+                    mapType = MapObjectType.NpcQuest; color = Brushes.LightGreen; toolTipBase = NpcDatabase.GetNpcName(n.TypeNumber);
+                    break;
+                case ItemScopeObject i:
+                    mapType = MapObjectType.Item; color = Brushes.Cyan; toolTipBase = i.ItemDescription; size = 3;
+                    break;
+                case MoneyScopeObject m:
+                    mapType = MapObjectType.Money; color = Brushes.Gold; toolTipBase = $"Zen ({m.Amount})"; size = 3;
+                    break;
+                default:
+                    _logger.LogWarning("Unknown scope object type for map: {Type}", scopeObject.GetType().Name);
+                    return null;
+            }
+
+            // --- Use Constructor ---
+            var viewModel = new MapObjectViewModel(
+                id: scopeObject.Id,
+                rawId: scopeObject.RawId,
+                objectType: mapType,
+                initialX: scopeObject.PositionX,
+                initialY: scopeObject.PositionY
+            );
+            // --- End Constructor Use ---
+
+            // Set remaining properties using standard assignment
+            viewModel.Color = color;
+            viewModel.Size = size;
+            viewModel.ToolTipText = $"{toolTipBase} @ ({scopeObject.PositionX},{scopeObject.PositionY})";
+
+            // Set initial MapX/MapY based on current scale AFTER object creation
+            viewModel.MapX = scopeObject.PositionX * MapScale;
+            viewModel.MapY = scopeObject.PositionY * MapScale;
+
+            return viewModel;
+        }
+
+        // --- Komendy dla Mapy ---
+        [RelayCommand]
+        private void ZoomInMap()
+        {
+            MapScale = Math.Min(MapScale * ScaleStep, MaxMapScale);
+            UpdateAllMapObjectScales();
+            AddLogMessage($"Map zoomed in (Scale: {MapScale:F1})", LogLevel.Debug);
+        }
+
+        [RelayCommand]
+        private void ZoomOutMap()
+        {
+            MapScale = Math.Max(MapScale / ScaleStep, MinMapScale);
+            UpdateAllMapObjectScales();
+            AddLogMessage($"Map zoomed out (Scale: {MapScale:F1})", LogLevel.Debug);
+        }
+
+        private void UpdateAllMapObjectScales()
+        {
+            foreach (var mapObj in _mapObjectDictionary.Values)
+            {
+                mapObj.UpdateScale(MapScale);
+            }
         }
 
         // --- Komendy dla UI ---

@@ -59,10 +59,17 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                         var c = scopeS6[i];
                         ushort rawId = c.Id;
                         ushort maskedId = (ushort)(rawId & 0x7FFF);
-                        _scopeManager.AddOrUpdatePlayerInScope(maskedId, rawId, c.CurrentPositionX, c.CurrentPositionY, c.Name);
+                        string name = c.Name;
+                        byte x = c.CurrentPositionX;
+                        byte y = c.CurrentPositionY;
+                        // --- LOGGING ADDED ---
+                        _logger.LogDebug("--> ScopeHandler: Parsed AddCharacter: ID={MaskedId:X4}, Name={Name}, ParsedPos=({X},{Y})", maskedId, name, x, y);
+                        _scopeManager.AddOrUpdatePlayerInScope(maskedId, rawId, x, y, name);
+                        var playerObj = new PlayerScopeObject(maskedId, rawId, x, y, name);
+                        _client.ViewModel.AddOrUpdateMapObject(playerObj);
                         if (c.Name == characterNameToFind && _characterState.Id == 0xFFFF)
                         {
-                            _logger.LogInformation("👀 Player '{Name}' (ID: {MaskedId:X4}) appeared at ({X},{Y}).", c.Name, maskedId, c.CurrentPositionX, c.CurrentPositionY);
+                            _logger.LogInformation("👀 Player '{Name}' (ID: {MaskedId:X4}) appeared at ({X},{Y}).", c.Name, maskedId, x, y);
                             foundCharacterId = maskedId;
                         }
                     }
@@ -75,10 +82,17 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                         var c = scope097[i];
                         ushort rawId097 = c.Id;
                         ushort maskedId097 = (ushort)(rawId097 & 0x7FFF);
-                        _scopeManager.AddOrUpdatePlayerInScope(maskedId097, rawId097, c.CurrentPositionX, c.CurrentPositionY, c.Name);
+                        string name = c.Name;
+                        byte x = c.CurrentPositionX;
+                        byte y = c.CurrentPositionY;
+                        // --- LOGGING ADDED ---
+                        _logger.LogDebug("--> ScopeHandler: Parsed AddCharacter: ID={MaskedId:X4}, Name={Name}, ParsedPos=({X},{Y})", maskedId097, name, x, y);
+                        _scopeManager.AddOrUpdatePlayerInScope(maskedId097, rawId097, x, y, name);
+                        var playerObj = new PlayerScopeObject(maskedId097, rawId097, x, y, name);
+                        _client.ViewModel.AddOrUpdateMapObject(playerObj);
                         if (c.Name == characterNameToFind && _characterState.Id == 0xFFFF)
                         {
-                            _logger.LogInformation("👀 Player '{Name}' (ID: {MaskedId:X4}) appeared at ({X},{Y}).", c.Name, maskedId097, c.CurrentPositionX, c.CurrentPositionY);
+                            _logger.LogInformation("👀 Player '{Name}' (ID: {MaskedId:X4}) appeared at ({X},{Y}).", c.Name, maskedId097, x, y);
                             foundCharacterId = maskedId097;
                         }
                     }
@@ -91,10 +105,17 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                         var c = scope075[i];
                         ushort rawId075 = c.Id;
                         ushort maskedId075 = (ushort)(rawId075 & 0x7FFF);
-                        _scopeManager.AddOrUpdatePlayerInScope(maskedId075, rawId075, c.CurrentPositionX, c.CurrentPositionY, c.Name);
+                        string name = c.Name;
+                        byte x = c.CurrentPositionX;
+                        byte y = c.CurrentPositionY;
+                        // --- LOGGING ADDED ---
+                        _logger.LogDebug("--> ScopeHandler: Parsed AddCharacter: ID={MaskedId:X4}, Name={Name}, ParsedPos=({X},{Y})", maskedId075, name, x, y);
+                        _scopeManager.AddOrUpdatePlayerInScope(maskedId075, rawId075, x, y, name);
+                        var playerObj = new PlayerScopeObject(maskedId075, rawId075, x, y, name);
+                        _client.ViewModel.AddOrUpdateMapObject(playerObj);
                         if (c.Name == characterNameToFind && _characterState.Id == 0xFFFF)
                         {
-                            _logger.LogInformation("👀 Player '{Name}' (ID: {MaskedId:X4}) appeared at ({X},{Y}).", c.Name, maskedId075, c.CurrentPositionX, c.CurrentPositionY);
+                            _logger.LogInformation("👀 Player '{Name}' (ID: {MaskedId:X4}) appeared at ({X},{Y}).", c.Name, maskedId075, x, y);
                             foundCharacterId = maskedId075;
                         }
                     }
@@ -107,6 +128,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             {
                 _characterState.Id = foundCharacterId;
                 _logger.LogInformation("🆔 Character ID set: {CharacterId:X4}", _characterState.Id);
+                _client.ViewModel.UpdateCharacterStateDisplay(); // Aktualizuj UI po ustawieniu ID
             }
 
             _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok Scope
@@ -136,16 +158,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🤖 Received AddNpcToScope (S6): {Count} NPC(s).", scopeS6.NpcCount);
                     for (int i = 0; i < scopeS6.NpcCount; i++)
                     {
-                        ushort typeNumber;
-                        byte currentX, currentY;
                         var npc = scopeS6[i];
                         ushort rawIdS6 = npc.Id;
                         ushort maskedIdS6 = (ushort)(rawIdS6 & 0x7FFF);
-                        _scopeManager.AddOrUpdateNpcInScope(maskedIdS6, rawIdS6, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber);
-                        typeNumber = npc.TypeNumber;
-                        currentX = npc.CurrentPositionX;
-                        currentY = npc.CurrentPositionY;
+                        ushort typeNumber = npc.TypeNumber;
+                        byte currentX = npc.CurrentPositionX;
+                        byte currentY = npc.CurrentPositionY;
+                        // --- LOGGING ADDED ---
+                        _logger.LogDebug("--> ScopeHandler: Parsed AddNpc: ID={MaskedId:X4}, Type={Type}, ParsedPos=({X},{Y})", maskedIdS6, typeNumber, currentX, currentY);
+                        _scopeManager.AddOrUpdateNpcInScope(maskedIdS6, rawIdS6, currentX, currentY, typeNumber);
                         string npcName = NpcDatabase.GetNpcName(typeNumber);
+                        var npcObj = new NpcScopeObject(maskedIdS6, rawIdS6, currentX, currentY, typeNumber, npcName);
+                        _client.ViewModel.AddOrUpdateMapObject(npcObj);
                         _logger.LogInformation("👀 {NpcDesignation} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npcName, maskedIdS6, currentX, currentY);
                     }
                     break;
@@ -154,16 +178,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🤖 Received AddNpcToScope (0.97): {Count} NPC(s).", scope097.NpcCount);
                     for (int i = 0; i < scope097.NpcCount; i++)
                     {
-                        ushort typeNumber;
-                        byte currentX, currentY;
                         var npc = scope097[i];
                         ushort rawId097 = npc.Id;
                         ushort maskedId097 = (ushort)(rawId097 & 0x7FFF);
-                        _scopeManager.AddOrUpdateNpcInScope(maskedId097, rawId097, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber);
-                        typeNumber = npc.TypeNumber;
-                        currentX = npc.CurrentPositionX;
-                        currentY = npc.CurrentPositionY;
+                        ushort typeNumber = npc.TypeNumber;
+                        byte currentX = npc.CurrentPositionX;
+                        byte currentY = npc.CurrentPositionY;
+                        // --- LOGGING ADDED ---
+                        _logger.LogDebug("--> ScopeHandler: Parsed AddNpc: ID={MaskedId:X4}, Type={Type}, ParsedPos=({X},{Y})", maskedId097, typeNumber, currentX, currentY);
+                        _scopeManager.AddOrUpdateNpcInScope(maskedId097, rawId097, currentX, currentY, typeNumber);
                         string npcName = NpcDatabase.GetNpcName(typeNumber);
+                        var npcObj = new NpcScopeObject(maskedId097, rawId097, currentX, currentY, typeNumber, npcName);
+                        _client.ViewModel.AddOrUpdateMapObject(npcObj);
                         _logger.LogInformation("👀 {NpcDesignation} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npcName, maskedId097, currentX, currentY);
                     }
                     break;
@@ -172,17 +198,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogInformation("🤖 Received AddNpcToScope (0.75): {Count} NPC(s).", scope075.NpcCount);
                     for (int i = 0; i < scope075.NpcCount; i++)
                     {
-                        ushort typeNumber;
-                        byte currentX, currentY;
                         var npc = scope075[i];
                         ushort rawId075 = npc.Id;
                         ushort maskedId075 = (ushort)(rawId075 & 0x7FFF);
-                        _scopeManager.AddOrUpdateNpcInScope(maskedId075, rawId075, npc.CurrentPositionX, npc.CurrentPositionY, npc.TypeNumber);
-                        // Use NpcDatabase for logging
-                        typeNumber = npc.TypeNumber;
-                        currentX = npc.CurrentPositionX;
-                        currentY = npc.CurrentPositionY;
+                        ushort typeNumber = npc.TypeNumber;
+                        byte currentX = npc.CurrentPositionX;
+                        byte currentY = npc.CurrentPositionY;
+                        // --- LOGGING ADDED ---
+                        _logger.LogDebug("--> ScopeHandler: Parsed AddNpc: ID={MaskedId:X4}, Type={Type}, ParsedPos=({X},{Y})", maskedId075, typeNumber, currentX, currentY);
+                        _scopeManager.AddOrUpdateNpcInScope(maskedId075, rawId075, currentX, currentY, typeNumber);
                         string npcName = NpcDatabase.GetNpcName(typeNumber);
+                        var npcObj = new NpcScopeObject(maskedId075, rawId075, currentX, currentY, typeNumber, npcName);
+                        _client.ViewModel.AddOrUpdateMapObject(npcObj);
                         _logger.LogInformation("👀 {NpcDesignation} (ID: {MaskedId:X4}) appeared at ({X},{Y}).", npcName, maskedId075, currentX, currentY);
                     }
                     break;
@@ -223,35 +250,48 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 int currentOffset = ItemsDroppedFixedPrefixSize;
                 for (int i = 0; i < droppedItems.ItemCount; i++)
                 {
-                    const int assumedItemDataLengthS6 = 12;
-                    int currentStructSize = ItemsDropped.DroppedItem.GetRequiredSize(assumedItemDataLengthS6);
+                    // Season 6 uses a known item data length (usually 12 bytes)
+                    // Need to get the actual size of the structure for correct slicing
+                    int actualItemDataLength = 12; // Assuming default S6 item data length
+                    int currentStructSize = ItemsDropped.DroppedItem.GetRequiredSize(actualItemDataLength);
+
                     if (currentOffset + currentStructSize > packet.Length)
                     {
-                        _logger.LogWarning("  -> Packet too short for assumed DroppedItem {Index} size.", i);
+                        _logger.LogWarning("  -> Packet too short for DroppedItem {Index} (Offset: {Offset}, Size: {Size}, PacketLen: {PacketLen}).", i, currentOffset, currentStructSize, packet.Length);
                         break;
                     }
                     var itemMemory = packet.Slice(currentOffset, currentStructSize);
                     var item = new ItemsDropped.DroppedItem(itemMemory);
                     ushort rawId = item.Id;
                     ushort maskedId = (ushort)(rawId & 0x7FFF);
+                    byte x = item.PositionX;
+                    byte y = item.PositionY;
                     ReadOnlySpan<byte> itemData = item.ItemData;
+
+                    // --- LOGGING ADDED ---
+                    _logger.LogDebug("--> ScopeHandler: Parsed DroppedItem/Money: ID={MaskedId:X4}, ParsedPos=({X},{Y})", maskedId, x, y);
+
                     bool isMoney = itemData.Length >= 6 && itemData[0] == 15 && (itemData[5] >> 4) == 14;
                     uint moneyAmount = 0;
+                    ScopeObject dropObj;
                     if (isMoney && itemData.Length >= 5)
                     {
                         moneyAmount = itemData[4];
                     }
                     if (isMoney)
                     {
-                        _scopeManager.AddOrUpdateMoneyInScope(maskedId, rawId, item.PositionX, item.PositionY, moneyAmount);
-                        _logger.LogDebug("  -> Dropped Money (S6/0.97): Amount={Amount}, RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y})", moneyAmount, rawId, maskedId, item.PositionX, item.PositionY);
+                        dropObj = new MoneyScopeObject(maskedId, rawId, x, y, moneyAmount);
+                        _scopeManager.AddOrUpdateMoneyInScope(maskedId, rawId, x, y, moneyAmount);
+                        _logger.LogDebug("  -> Dropped Money (S6/0.97): Amount={Amount}, RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y})", moneyAmount, rawId, maskedId, x, y);
                     }
                     else
                     {
-                        _scopeManager.AddOrUpdateItemInScope(maskedId, rawId, item.PositionX, item.PositionY, itemData);
-                        _logger.LogDebug("  -> Dropped Item (S6/0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), DataLen={DataLen}", rawId, maskedId, item.PositionX, item.PositionY, itemData.Length);
+                        dropObj = new ItemScopeObject(maskedId, rawId, x, y, itemData);
+                        _scopeManager.AddOrUpdateItemInScope(maskedId, rawId, x, y, itemData);
+                        _logger.LogDebug("  -> Dropped Item (S6/0.97): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), DataLen={DataLen}", rawId, maskedId, x, y, itemData.Length);
                     }
                     currentOffset += currentStructSize;
+                    _client.ViewModel.AddOrUpdateMapObject(dropObj);
                 }
             }
             else if (_targetVersion == TargetProtocolVersion.Version075)
@@ -269,9 +309,14 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     ushort maskedId = (ushort)(rawId & 0x7FFF);
                     byte x = droppedObjectLegacy.PositionX;
                     byte y = droppedObjectLegacy.PositionY;
+                    // --- LOGGING ADDED ---
+                    _logger.LogDebug("--> ScopeHandler: Parsed DroppedItem/Money (0.75): ID={MaskedId:X4}, ParsedPos=({X},{Y})", maskedId, x, y);
+
+                    ScopeObject dropObj;
                     if (droppedObjectLegacy.MoneyGroup == 14 && droppedObjectLegacy.MoneyNumber == 15)
                     {
                         uint amount = droppedObjectLegacy.Amount;
+                        dropObj = new MoneyScopeObject(maskedId, rawId, x, y, amount);
                         _scopeManager.AddOrUpdateMoneyInScope(maskedId, rawId, x, y, amount);
                         _logger.LogDebug("  -> Dropped Money (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), Amount={Amount}", rawId, maskedId, x, y, amount);
                     }
@@ -282,14 +327,17 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                         if (packet.Length >= itemDataOffset + itemDataLength075)
                         {
                             ReadOnlySpan<byte> itemData = packet.Span.Slice(itemDataOffset, itemDataLength075);
+                            dropObj = new ItemScopeObject(maskedId, rawId, x, y, itemData);
                             _scopeManager.AddOrUpdateItemInScope(maskedId, rawId, x, y, itemData);
                             _logger.LogDebug("  -> Dropped Item (0.75): RawID={RawId:X4}, MaskedID={MaskedId:X4}, Pos=({X},{Y}), DataLen={DataLen}", rawId, maskedId, x, y, itemData.Length);
                         }
                         else
                         {
                             _logger.LogWarning("  -> Could not extract expected item data from Dropped Object packet (0.75).");
+                            return; // Cannot create map object without data
                         }
                     }
+                    _client.ViewModel.AddOrUpdateMapObject(dropObj); // Add to map only if created
                 }
                 else
                 {
@@ -359,6 +407,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                         // Log successful removal
                         _logger.LogInformation("💨 {ItemName} (ID: {MaskedId:X4}) disappeared from view.", itemName, idFromServerMasked);
                     }
+                    _client.ViewModel.RemoveMapObject(idFromServerMasked);
                 }
                 catch (Exception ex)
                 {
@@ -419,6 +468,7 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                             // Optional: Log if removal failed, might indicate state inconsistency
                             _logger.LogDebug("Attempted to remove object {MaskedId:X4} from scope (Out of Scope packet), but it was not found.", objectIdMasked);
                         }
+                        _client.ViewModel.RemoveMapObject(objectIdMasked);
                     }
                 }
             }
@@ -437,7 +487,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 objectIdMasked = (ushort)(objectIdRaw & 0x7FFF);
                 byte x = move.PositionX;
                 byte y = move.PositionY;
-                _logger.LogDebug("   -> Received ObjectMoved (0x15): RawID={RawId:X4}, MaskedID={Id:X4} -> ({X}, {Y})", objectIdRaw, objectIdMasked, x, y);
+                // --- LOGGING ADDED ---
+                _logger.LogDebug("--> ScopeHandler: Parsed ObjectMoved: ID={MaskedId:X4}, ParsedPos=({X},{Y})", objectIdMasked, x, y);
 
                 if (_scopeManager.TryUpdateScopeObjectPosition(objectIdMasked, x, y))
                 {
@@ -448,15 +499,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogTrace("   -> Object {Id:X4} not found in scope for position update (or not tracked).", objectIdMasked);
                 }
 
+                // Call VM update method
+                _client.ViewModel.UpdateMapObjectPosition(objectIdMasked, x, y);
+
                 if (objectIdMasked == _characterState.Id)
                 {
                     _logger.LogInformation("🏃‍♂️ Character teleported/moved to ({X}, {Y}) via 0x15", x, y);
                     _characterState.UpdatePosition(x, y);
                     _client.UpdateConsoleTitle();
-                    _client.ViewModel.UpdateCharacterStateDisplay(); // Aktualizuj info o postaci (pozycja)
+                    _client.ViewModel.UpdateCharacterStateDisplay();
                     _client.SignalMovementHandled();
                 }
-                _client.ViewModel.UpdateScopeDisplay(); // Aktualizuj widok scope, jeśli chcesz pokazywać pozycje
+                _client.ViewModel.UpdateScopeDisplay();
             }
             catch (Exception ex)
             {
@@ -484,7 +538,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                 byte targetX = walk.TargetX;
                 byte targetY = walk.TargetY;
                 byte stepCount = walk.StepCount;
-                _logger.LogDebug("🚶 Handling ObjectWalked (D4): RawID={RawId:X4}, MaskedID={Id:X4} -> ({X}, {Y}), Steps={Steps}", objectIdRaw, objectIdMasked, targetX, targetY, stepCount);
+                // --- LOGGING ADDED ---
+                _logger.LogDebug("--> ScopeHandler: Parsed ObjectWalked: ID={MaskedId:X4}, ParsedTargetPos=({X},{Y})", objectIdMasked, targetX, targetY);
 
                 if (_scopeManager.TryUpdateScopeObjectPosition(objectIdMasked, targetX, targetY))
                 {
@@ -495,11 +550,14 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     _logger.LogTrace("   -> Object {Id:X4} not found in scope for walk update (or not tracked).", objectIdMasked);
                 }
 
+                // Call VM update method
+                _client.ViewModel.UpdateMapObjectPosition(objectIdMasked, targetX, targetY);
+
                 if (objectIdMasked == _characterState.Id)
                 {
                     _characterState.UpdatePosition(targetX, targetY);
                     _client.UpdateConsoleTitle();
-                    _client.ViewModel.UpdateCharacterStateDisplay(); // Aktualizuj info o postaci (pozycja)
+                    _client.ViewModel.UpdateCharacterStateDisplay();
                     if (stepCount == 0)
                     {
                         _logger.LogInformation("🚶‍➡️ Character walk ended/rotated at ({TargetX},{TargetY}) via 0xD4 (Steps=0)", targetX, targetY);
@@ -508,14 +566,15 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
                     else
                     {
                         _logger.LogInformation("🚶‍➡️ Character walking -> [Server Target:({TargetX},{TargetY})] Steps:{Steps}", targetX, targetY, stepCount);
+                        // Don't signal handled yet, wait for move/teleport/stop packet
                     }
-                    _client.ViewModel.UpdateScopeDisplay(); // Aktualizuj widok scope, jeśli chcesz pokazywać pozycje
-
                 }
                 else
                 {
                     _logger.LogDebug("   -> Other object ({Id:X4}) walking -> [Server Target:({TargetX},{TargetY})] Steps:{Steps}", objectIdMasked, targetX, targetY, stepCount);
                 }
+                _client.ViewModel.UpdateScopeDisplay();
+
             }
             catch (Exception ex)
             {
@@ -523,9 +582,18 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
             }
             finally
             {
+                // Signal handled ONLY if it was our character AND the walk ended (stepCount == 0)
+                // The logic inside the main try block handles this.
+                // We might need to handle errors differently if the walk lock causes issues.
                 if (objectIdMasked == _characterState.Id)
                 {
-                    _client.SignalMovementHandledIfWalking();
+                    var walk = new ObjectWalked(packet); // Reparse maybe needed or store stepCount
+                    if (walk.StepCount == 0)
+                    {
+                        _client.SignalMovementHandledIfWalking();
+                    }
+                    // If error occurred before checking stepCount, ensure lock is released
+                    // This 'finally' might be too broad, reconsider if problems arise
                 }
             }
             return Task.CompletedTask;
@@ -550,6 +618,8 @@ namespace MuOnlineConsole.Networking.PacketHandling.Handlers
 
                 _scopeManager.RemoveObjectFromScope(killedIdMasked); // Usuń z scope
                 _client.ViewModel.UpdateScopeDisplay(); // Odśwież widok scope
+
+                _client.ViewModel.RemoveMapObject(killedIdMasked); // Usuń z mapy
 
                 if (killedIdMasked == _characterState.Id)
                 {

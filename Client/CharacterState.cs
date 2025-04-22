@@ -648,6 +648,47 @@ namespace MuOnlineConsole.Client
         }
 
         /// <summary>
+        /// Gets character statistics as a list of key-value pairs for structured display.
+        /// </summary>
+        /// <returns>A list of statistic names and their values.</returns>
+        public List<KeyValuePair<string, string>> GetFormattedStatsList()
+        {
+            var stats = new List<KeyValuePair<string, string>>
+            {
+                new("Name", Name),
+                new("ID", $"{Id:X4}"),
+                new("Class", CharacterClassDatabase.GetClassName(Class)),
+                new("Level", $"{Level} ({LevelUpPoints} Pts)"),
+                // Dodaj Master Level jeśli istnieje
+                new("Experience", $"{Experience:N0} / {ExperienceForNextLevel:N0}"),
+                // Dodaj Master Experience jeśli istnieje
+                new("Map", $"{MapDatabase.GetMapName(MapId)} ({MapId})"),
+                new("Position", $"({PositionX}, {PositionY})"),
+                new("Status", Status.ToString()),
+                new("Hero State", HeroState.ToString()),
+                new("HP", $"{CurrentHealth} / {MaximumHealth}"),
+                new("Mana", $"{CurrentMana} / {MaximumMana}"),
+                new("SD", $"{CurrentShield} / {MaximumShield}"),
+                new("AG", $"{CurrentAbility} / {MaximumAbility}"),
+                new("Strength", Strength.ToString()),
+                new("Agility", Agility.ToString()),
+                new("Vitality", Vitality.ToString()),
+                new("Energy", Energy.ToString()),
+                new("Command", Leadership.ToString()),
+                new("Inventory Zen", $"{InventoryZen:N0}")
+            };
+
+            if (MasterLevel > 0)
+            {
+                stats.Insert(4, new KeyValuePair<string, string>("Master Lvl", $"{MasterLevel} ({MasterLevelUpPoints} Pts)"));
+                stats.Insert(6, new KeyValuePair<string, string>("Master Exp", $"{MasterExperience:N0} / {MasterExperienceForNextLevel:N0}"));
+            }
+
+
+            return stats;
+        }
+
+        /// <summary>
         /// Gets a read-only dictionary representation of the current inventory items.
         /// Key is the slot number, Value is the raw item data.
         /// </summary>
