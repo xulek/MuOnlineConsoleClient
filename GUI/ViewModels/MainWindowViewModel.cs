@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Media;
 using Avalonia.Threading; // For Dispatcher
 using CommunityToolkit.Mvvm.ComponentModel; // Zamiast ręcznej implementacji INotifyPropertyChanged
@@ -60,11 +61,14 @@ namespace MuOnlineConsole.GUI.ViewModels
         private readonly ConcurrentDictionary<ushort, MapObjectViewModel> _mapObjectDictionary = new();
 
         // --- Skalowanie Mapy ---
-        [ObservableProperty] private double _mapScale = 10.0; // Początkowe powiększenie (np. 10px na koordynatę)
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(MapWidth))] // Powiadom o zmianie MapWidth
+        [NotifyPropertyChangedFor(nameof(MapHeight))] // Powiadom o zmianie MapHeight
+        private double _mapScale = 1.0;
         [ObservableProperty] private double _mapOffsetX = 0;
         [ObservableProperty] private double _mapOffsetY = 0;
         private const double MaxMapScale = 30.0;
-        private const double MinMapScale = 1.0;
+        private const double MinMapScale = 0.5; // Pozwól na mniejszą skalę
         private const double ScaleStep = 1.2;
 
         [ObservableProperty]
@@ -110,6 +114,16 @@ namespace MuOnlineConsole.GUI.ViewModels
 
         // Sygnał dla widoku, że powinien przewinąć (nie jest to standardowe MVVM, ale proste)
         public event EventHandler? ScrollToLogEndRequested;
+
+        // NOWE: Właściwość dla Marginesu Canvas
+        [ObservableProperty]
+        private Thickness _canvasMargin = new Thickness(0);
+
+        // Przywrócone: Właściwości dla rozmiaru Canvas
+        public double MapWidth => 255 * MapScale;
+        public double MapHeight => 255 * MapScale;
+
+        private Size _currentMapContainerSize = new Size(); // Nadal potrzebne
 
         // Flaga projektowa dla XAML Designer
         public MainWindowViewModel() : this(null!, null!, true) { }
@@ -401,34 +415,22 @@ namespace MuOnlineConsole.GUI.ViewModels
 
             Dispatcher.UIThread.InvokeAsync(() =>
             {
-                // Log INSIDE InvokeAsync
-                _logger.LogTrace("  -> VM.AddOrUpdate (UI Thread): Processing ID={Id:X4}", scopeObject.Id);
+                bool isSelf = scopeObject.Id == _characterState.Id;
                 if (_mapObjectDictionary.TryGetValue(scopeObject.Id, out var existingMapObject))
                 {
-                    // Log BEFORE calling UpdatePosition
-                    _logger.LogTrace("    -> Updating existing MapObjectViewModel ID={Id:X4} with Pos=({X},{Y}), Scale={Scale:F2}",
-                        scopeObject.Id, scopeObject.PositionX, scopeObject.PositionY, MapScale);
                     existingMapObject.UpdatePosition(scopeObject.PositionX, scopeObject.PositionY, MapScale);
-                    // Log the result AFTER calling UpdatePosition
-                    _logger.LogTrace("      -> After UpdatePosition: MapX={MapX:F2}, MapY={MapY:F2}", existingMapObject.MapX, existingMapObject.MapY);
+                    if (isSelf) CalculateCanvasMargin(); // <--- PRZYWRÓCONE
                 }
                 else
                 {
-                    // Log BEFORE creating/updating
-                    _logger.LogTrace("    -> Creating new MapObjectViewModel for ID={Id:X4} with Pos=({X},{Y}), Scale={Scale:F2}",
-                        scopeObject.Id, scopeObject.PositionX, scopeObject.PositionY, MapScale);
-
-                    var newMapObject = CreateMapObjectViewModel(scopeObject); // Creates and sets initial OriginalX/Y
+                    var newMapObject = CreateMapObjectViewModel(scopeObject);
                     if (newMapObject != null)
                     {
-                        // Explicitly update position WITH SCALE *after* creation and *before* adding
                         newMapObject.UpdatePosition(scopeObject.PositionX, scopeObject.PositionY, MapScale);
-
                         if (_mapObjectDictionary.TryAdd(scopeObject.Id, newMapObject))
                         {
                             MapObjects.Add(newMapObject);
-                            // Log AFTER adding and updating
-                            _logger.LogTrace("      -> After Create/Add: MapX={MapX:F2}, MapY={MapY:F2}", newMapObject.MapX, newMapObject.MapY);
+                            if (isSelf) CalculateCanvasMargin(); // <--- PRZYWRÓCONE
                         }
                         else
                         {
@@ -443,15 +445,61 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
-        public double MapWidth => 255 * MapScale;
-        public double MapHeight => 255 * MapScale;
-
+        // Przywróć wywołania CalculateCanvasMargin
         partial void OnMapScaleChanged(double oldValue, double newValue)
         {
             OnPropertyChanged(nameof(MapWidth));
             OnPropertyChanged(nameof(MapHeight));
             UpdateAllMapObjectScales();
+            CalculateCanvasMargin(); // <--- PRZYWRÓCONE
         }
+
+        public void UpdateMapContainerSize(Size newSize) // Ta metoda pozostaje poprawna
+        {
+            if (_currentMapContainerSize != newSize && newSize.Width > 1 && newSize.Height > 1)
+            {
+                _logger.LogDebug("Updating MapContainerSize from {OldSize} to {NewSize}", _currentMapContainerSize, newSize);
+                _currentMapContainerSize = newSize;
+                RecalculateScaleOnly(); // To wywoła OnMapScaleChanged -> CalculateCanvasMargin
+            }
+        }
+
+        // Przelicza tylko skalę
+        private void RecalculateScaleOnly() // Ta metoda pozostaje poprawna
+        {
+            const double mapSizeInTiles = 255.0;
+            if (_currentMapContainerSize.Width <= 1 || _currentMapContainerSize.Height <= 1 || mapSizeInTiles <= 0) { return; }
+            double scaleX = _currentMapContainerSize.Width / mapSizeInTiles;
+            double scaleY = _currentMapContainerSize.Height / mapSizeInTiles;
+            double bestFitScale = Math.Max(MinMapScale, Math.Min(scaleX, scaleY));
+            if (Math.Abs(MapScale - bestFitScale) > 0.01) { MapScale = bestFitScale; }
+            else { _logger.LogTrace("Skipping MapScale update, change too small."); }
+        }
+
+        // === PRZYWRÓĆ METODĘ ===
+        private void CalculateCanvasMargin()
+        {
+            if (_mapObjectDictionary.TryGetValue(_characterState.Id, out var playerObject) && _currentMapContainerSize != default(Size) && _currentMapContainerSize.Width > 0 && _currentMapContainerSize.Height > 0)
+            {
+                double playerMapX = playerObject.MapX;
+                double playerMapY = playerObject.MapY;
+                double viewportCenterX = _currentMapContainerSize.Width / 2.0;
+                double viewportCenterY = _currentMapContainerSize.Height / 2.0;
+                double marginLeft = viewportCenterX - playerMapX;
+                double marginTop = viewportCenterY - playerMapY;
+
+                _logger.LogDebug("Calculating Canvas Margin: PlayerMap=({pX:F2},{pY:F2}), ViewportCenter=({vX:F2},{vY:F2}), TargetMargin=({mL:F2},{mT:F2})",
+                                 playerMapX, playerMapY, viewportCenterX, viewportCenterY, marginLeft, marginTop);
+
+                CanvasMargin = new Thickness(marginLeft, marginTop, 0, 0);
+            }
+            else
+            {
+                _logger.LogTrace("Cannot calculate canvas margin: Player object (ID {PlayerId:X4}) not found or container size is zero/default.", _characterState.Id);
+                CanvasMargin = new Thickness(0); // Ustaw domyślny margines
+            }
+        }
+        // === KONIEC ===
 
         public void RemoveMapObject(ushort maskedId)
         {
@@ -472,16 +520,10 @@ namespace MuOnlineConsole.GUI.ViewModels
 
             Dispatcher.UIThread.InvokeAsync(() =>
             {
-                // Log INSIDE InvokeAsync
-                _logger.LogTrace("  -> VM.UpdatePosition (UI Thread): Processing ID={Id:X4}", maskedId);
                 if (_mapObjectDictionary.TryGetValue(maskedId, out var mapObject))
                 {
-                    // Log BEFORE calling UpdatePosition
-                    _logger.LogTrace("    -> Calling UpdatePosition on MapObjectViewModel ID={Id:X4} with Pos=({X},{Y}), Scale={Scale:F2}",
-                        maskedId, x, y, MapScale);
                     mapObject.UpdatePosition(x, y, MapScale);
-                    // Log the result AFTER calling UpdatePosition
-                    _logger.LogTrace("      -> After UpdatePosition: MapX={MapX:F2}, MapY={MapY:F2}", mapObject.MapX, mapObject.MapY);
+                    if (maskedId == _characterState.Id) { CalculateCanvasMargin(); } // <--- PRZYWRÓCONE
                 }
                 else
                 {
@@ -567,29 +609,31 @@ namespace MuOnlineConsole.GUI.ViewModels
             return viewModel;
         }
 
-        // --- Komendy dla Mapy ---
+        // Komendy Zoom - zmodyfikuj, aby używały MinMapScale
         [RelayCommand]
         private void ZoomInMap()
         {
             MapScale = Math.Min(MapScale * ScaleStep, MaxMapScale);
-            UpdateAllMapObjectScales();
+            // OnMapScaleChanged zajmie się resztą (UpdateAllMapObjectScales + CalculateCanvasMargin)
             AddLogMessage($"Map zoomed in (Scale: {MapScale:F1})", LogLevel.Debug);
         }
 
         [RelayCommand]
         private void ZoomOutMap()
         {
-            MapScale = Math.Max(MapScale / ScaleStep, MinMapScale);
-            UpdateAllMapObjectScales();
+            MapScale = Math.Max(MapScale / ScaleStep, MinMapScale); // Użyj MinMapScale
+            // OnMapScaleChanged zajmie się resztą
             AddLogMessage($"Map zoomed out (Scale: {MapScale:F1})", LogLevel.Debug);
         }
 
-        private void UpdateAllMapObjectScales()
+        private void UpdateAllMapObjectScales() // Wywoływana przy zmianie MapScale
         {
+            _logger.LogDebug("Updating all map object scales to: {NewScale:F2}", MapScale);
             foreach (var mapObj in _mapObjectDictionary.Values)
             {
                 mapObj.UpdateScale(MapScale);
             }
+            CalculateCanvasMargin(); // <--- PRZYWRÓCONE (lub upewnij się, że jest wywoływane przez OnMapScaleChanged)
         }
 
         // --- Komendy dla UI ---
