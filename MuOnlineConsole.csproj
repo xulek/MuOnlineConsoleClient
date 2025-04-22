@@ -28,6 +28,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Upewnij się, że obrazek mapy jest uwzględniony jako zasób -->
+    <!-- Jeśli ustawiłeś Build Action na AvaloniaResource w IDE, to może nie być konieczne, -->
+    <!-- ale dodanie tego jawnie nie zaszkodzi. Zaktualizuj ścieżkę i nazwę pliku! -->
+    <AvaloniaResource Include="Assets\Maps\Lorencia.webp" />
+    <!-- Jeśli masz więcej zasobów w Assets, możesz użyć wzorca: -->
+    <!-- <AvaloniaResource Include="Assets\**" /> -->
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="Configuration\appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>appsettings.json</Link>

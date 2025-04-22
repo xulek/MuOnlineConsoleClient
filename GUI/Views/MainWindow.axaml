@@ -81,31 +81,42 @@
 
  <TabItem Header="Map">
      <DockPanel LastChildFill="True" x:Name="MapDockPanel">
+         <!-- Przyciski Zoom (jeśli je dodałeś, zostaw) -->
+         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="5" Margin="5">
+             <Button Content="Zoom In" Command="{Binding ZoomInMapCommand}"/>
+             <Button Content="Zoom Out" Command="{Binding ZoomOutMapCommand}"/>
+             <TextBlock Text="{Binding MapScale, StringFormat='Scale: {0:F1}'}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+         </StackPanel>
+
          <ScrollViewer HorizontalScrollBarVisibility="Auto"
                        VerticalScrollBarVisibility="Auto"
                        Background="#111111">
-             <!-- Użyj Border dla wizualizacji -->
+             <!-- Border dla wizualizacji granic -->
              <Border BorderBrush="DarkGoldenrod" BorderThickness="2" ClipToBounds="True">
                  <ItemsControl ItemsSource="{Binding MapObjects}">
                      <ItemsControl.ItemsPanel>
                          <ItemsPanelTemplate>
-                             <!-- Canvas ma BINDOWANY rozmiar i MARGINES -->
-                             <Canvas Background="#222222"
-                                     Width="{Binding MapWidth}"
+                             <!-- Canvas ma BINDOWANY rozmiar ORAZ MARGINES -->
+                             <Canvas Width="{Binding MapWidth}"
                                      Height="{Binding MapHeight}"
-                                     Margin="{Binding CanvasMargin}"/>
-                                     <!-- ^^^ DODANO Margin z powrotem ^^^ -->
+                                     Margin="{Binding CanvasMargin}">
+                                 <!-- Tło obrazkowe -->
+                                 <Canvas.Background>
+                                     <ImageBrush Source="avares://MuOnlineConsole/Assets/Maps/Lorencia.webp"
+                                                 Stretch="Fill"/>
+                                 </Canvas.Background>
+                             </Canvas>
                          </ItemsPanelTemplate>
                      </ItemsControl.ItemsPanel>
 
-                     <!-- ItemTemplate z Ellipse i TranslateTransform -->
+                     <!-- ItemTemplate POZOSTAJE z TranslateTransform -->
                      <ItemsControl.ItemTemplate>
                          <DataTemplate DataType="vm:MapObjectViewModel">
                              <Ellipse Width="{Binding Size}"
                                       Height="{Binding Size}"
                                       Fill="{Binding Color}"
                                       ToolTip.Tip="{Binding ToolTipText}">
-                                 <!-- Użyj TranslateTransform do pozycjonowania Ellipse -->
+                                 <!-- Pozycjonowanie Ellipse za pomocą TranslateTransform -->
                                  <Ellipse.RenderTransform>
                                      <TranslateTransform X="{Binding MapX}" Y="{Binding MapY}" />
                                  </Ellipse.RenderTransform>
