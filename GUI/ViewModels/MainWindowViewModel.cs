@@ -4,23 +4,24 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
-using Avalonia.Threading; // For Dispatcher
-using CommunityToolkit.Mvvm.ComponentModel; // Zamiast ręcznej implementacji INotifyPropertyChanged
-using CommunityToolkit.Mvvm.Input; // Dla RelayCommand
+using Avalonia.Threading;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
-using MUnique.OpenMU.Network.Packets; // Dla enums
+using MUnique.OpenMU.Network.Packets;
 using MuOnlineConsole.Client;
 using MuOnlineConsole.Configuration;
-using MuOnlineConsole.Core.Models; // Dla ServerInfo
-using MuOnlineConsole.Core.Utilities; // Dla klas baz danych
+using MuOnlineConsole.Core.Models;
+using MuOnlineConsole.Core.Utilities;
 
 namespace MuOnlineConsole.GUI.ViewModels
 {
-    // Klasy pomocnicze dla list w UI
+    /// <summary>
+    /// View model for server information displayed in a list.
+    /// </summary>
     public class ServerInfoViewModel
     {
         public ushort ServerId { get; set; }
@@ -28,6 +29,9 @@ namespace MuOnlineConsole.GUI.ViewModels
         public string DisplayText => $"ID: {ServerId}, Load: {LoadPercentage}%";
     }
 
+    /// <summary>
+    /// View model for character information displayed in a list.
+    /// </summary>
     public class CharacterInfoViewModel
     {
         public string Name { get; set; } = string.Empty;
@@ -35,54 +39,51 @@ namespace MuOnlineConsole.GUI.ViewModels
         public string DisplayText => $"{Name} ({CharacterClassDatabase.GetClassName(Class)})";
     }
 
-    // Główny ViewModel
-    public partial class MainWindowViewModel : ObservableObject // Użyj ObservableObject z CommunityToolkit.Mvvm
+    /// <summary>
+    /// The main view model for the application window.
+    /// </summary>
+    public partial class MainWindowViewModel : ObservableObject
     {
         private readonly ILoggerFactory _loggerFactory;
         private readonly ILogger<MainWindowViewModel> _logger;
         private readonly MuOnlineSettings _settings;
         private SimpleLoginClient? _client;
-        private readonly CharacterState _characterState; // Przechowuj stan postaci
-        private readonly ScopeManager _scopeManager; // Przechowuj menedżera zasięgu
+        private readonly CharacterState _characterState;
+        private readonly ScopeManager _scopeManager;
 
-        // --- Kolekcje dla UI ---
+        // Collections for UI binding
         [ObservableProperty] private ObservableCollection<string> _logMessages = new();
         [ObservableProperty] private ObservableCollection<ServerInfoViewModel> _serverList = new();
         [ObservableProperty] private ObservableCollection<CharacterInfoViewModel> _characterList = new();
         [ObservableProperty] private ObservableCollection<string> _scopeItems = new();
         [ObservableProperty] private ObservableCollection<string> _inventoryItems = new();
         [ObservableProperty] private ObservableCollection<string> _skillItems = new();
-        [ObservableProperty] private ObservableCollection<KeyValuePair<string, string>> _characterStatsList = new(); // NOWA: Dla zakładki Stats
+        [ObservableProperty] private ObservableCollection<KeyValuePair<string, string>> _characterStatsList = new();
 
-        // --- Kolekcja dla Mapy ---
-        [ObservableProperty]
-        private ObservableCollection<MapObjectViewModel> _mapObjects = new();
-        // Słownik do szybkiego wyszukiwania obiektów na mapie po ID
+        // Map related collections and properties
+        [ObservableProperty] private ObservableCollection<MapObjectViewModel> _mapObjects = new();
         private readonly ConcurrentDictionary<ushort, MapObjectViewModel> _mapObjectDictionary = new();
 
-        // --- Skalowanie Mapy ---
         [ObservableProperty]
-        [NotifyPropertyChangedFor(nameof(MapWidth))] // Powiadom o zmianie MapWidth
-        [NotifyPropertyChangedFor(nameof(MapHeight))] // Powiadom o zmianie MapHeight
-        private double _mapScale = 1.0;
+        [NotifyPropertyChangedFor(nameof(MapWidth))]
+        [NotifyPropertyChangedFor(nameof(MapHeight))]
+        private double _mapScale = 2.1;
         [ObservableProperty] private double _mapOffsetX = 0;
         [ObservableProperty] private double _mapOffsetY = 0;
         private const double MaxMapScale = 30.0;
-        private const double MinMapScale = 0.5; // Pozwól na mniejszą skalę
+        private const double MinMapScale = 0.5;
         private const double ScaleStep = 1.2;
 
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(WindowTitle))]
-        [NotifyPropertyChangedFor(nameof(ConnectionStatus))] // Dodaj to, jeśli ConnectionStatus zależy od _currentState
-        [NotifyPropertyChangedFor(nameof(CharacterInfo))] // Dodaj to, jeśli CharacterInfo zależy od _currentState
-        [NotifyPropertyChangedFor(nameof(CanConnectServer))] // Jeśli zależy od stanu
-        [NotifyPropertyChangedFor(nameof(CanRefreshServers))] // Jeśli zależy od stanu
-        [NotifyPropertyChangedFor(nameof(CanConnectGameServer))] // Jeśli zależy od stanu
-        [NotifyPropertyChangedFor(nameof(CanSelectCharacter))] // Jeśli zależy od stanu
-                                                               // Usunięto: [NotifyCanExecuteChangedFor(nameof(IsInGame))]
+        [NotifyPropertyChangedFor(nameof(ConnectionStatus))]
+        [NotifyPropertyChangedFor(nameof(CharacterInfo))]
+        [NotifyPropertyChangedFor(nameof(CanConnectServer))]
+        [NotifyPropertyChangedFor(nameof(CanRefreshServers))]
+        [NotifyPropertyChangedFor(nameof(CanConnectGameServer))]
+        [NotifyPropertyChangedFor(nameof(CanSelectCharacter))]
         private ClientConnectionState _currentState = ClientConnectionState.Initial;
 
-        // Właściwość IsInGame pozostaje bez zmian lub ją dodaj, jeśli jej nie ma
         public bool IsInGame => CurrentState == ClientConnectionState.InGame;
 
         [ObservableProperty]
@@ -94,15 +95,15 @@ namespace MuOnlineConsole.GUI.ViewModels
         private CharacterInfoViewModel? _selectedCharacter;
 
         [ObservableProperty]
-        private string _inputText = string.Empty; // Tekst wprowadzany przez użytkownika
+        private string _inputText = string.Empty;
 
-        // --- Właściwości Bindowane ---
+        // Bindable properties for UI display
         public string WindowTitle => $"MU Console Client - {(_characterState?.Name ?? "No Character")} ({CharacterClassDatabase.GetClassName(_characterState?.Class ?? CharacterClassNumber.DarkWizard)}) - {CurrentState}";
         public string ConnectionStatus => $"State: {CurrentState}";
         public string CharacterInfo => IsInGame ? $"Char: {_characterState.Name}, Lvl: {_characterState.Level} ({_characterState.MasterLevel}), Map: {MapDatabase.GetMapName(_characterState.MapId)} ({_characterState.PositionX},{_characterState.PositionY})" : "Not In Game";
-        // CharacterStatsDisplay może pozostać dla prawej kolumny, jeśli chcesz
         public string CharacterStatsDisplay => IsInGame ? _characterState.GetStatsDisplay() : "N/A";
 
+        // CanExecute properties for commands
         public bool CanConnectServer => CurrentState == ClientConnectionState.Initial || CurrentState == ClientConnectionState.Disconnected;
         public bool CanRefreshServers => CurrentState == ClientConnectionState.ConnectedToConnectServer || CurrentState == ClientConnectionState.ReceivedServerList;
         public bool CanConnectGameServer => SelectedServer != null && CurrentState == ClientConnectionState.ReceivedServerList;
@@ -110,29 +111,37 @@ namespace MuOnlineConsole.GUI.ViewModels
         public bool CanInteractWithServerList => CurrentState == ClientConnectionState.ConnectedToConnectServer || CurrentState == ClientConnectionState.ReceivedServerList;
 
         [ObservableProperty]
-        private bool _isAutoScrollEnabled = true; // Domyślnie włączony
+        private bool _isAutoScrollEnabled = true;
 
-        // Sygnał dla widoku, że powinien przewinąć (nie jest to standardowe MVVM, ale proste)
+        // Event for requesting UI scroll
         public event EventHandler? ScrollToLogEndRequested;
 
-        // NOWE: Właściwość dla Marginesu Canvas
+        // Property for Canvas margin
         [ObservableProperty]
         private Thickness _canvasMargin = new Thickness(0);
 
-        // Przywrócone: Właściwości dla rozmiaru Canvas
+        // Properties for Canvas size
         public double MapWidth => 255 * MapScale;
         public double MapHeight => 255 * MapScale;
 
-        private Size _currentMapContainerSize = new Size(); // Nadal potrzebne
+        private const byte MaxMapCoordinate = 255;
 
-        // Flaga projektowa dla XAML Designer
+        private Size _currentMapContainerSize = new Size();
+
+        // Design time constructor
         public MainWindowViewModel() : this(null!, null!, true) { }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MainWindowViewModel"/> class.
+        /// </summary>
+        /// <param name="loggerFactory">The logger factory.</param>
+        /// <param name="settings">The application settings.</param>
+        /// <param name="designMode">A flag indicating if the view model is in design mode.</param>
         public MainWindowViewModel(ILoggerFactory loggerFactory, MuOnlineSettings settings, bool designMode = false)
         {
             if (designMode)
             {
-                // Załaduj przykładowe dane dla Designera
+                // Load sample data for the designer
                 _logMessages.Add("Designer Mode: Log message 1");
                 _logMessages.Add("Designer Mode: Log message 2");
                 _serverList.Add(new ServerInfoViewModel { ServerId = 0, LoadPercentage = 50 });
@@ -143,104 +152,95 @@ namespace MuOnlineConsole.GUI.ViewModels
                 _scopeItems.Add("ID: C001 (NPC: Guard) at [110,115]");
                 _inventoryItems.Add("Slot  12: Kris +15 +Skill +Luck +16 Opt (Dur: 20)");
                 _skillItems.Add("ID: 6     Level: 1");
-                _currentState = ClientConnectionState.ReceivedServerList; // Stan dla podglądu
-                                                                          // Nie inicjuj _client ani _characterState w trybie projektowania
-                _settings = new MuOnlineSettings(); // Użyj domyślnych lub pustych ustawień
+                _currentState = ClientConnectionState.ReceivedServerList;
+                _settings = new MuOnlineSettings();
                 _logger = new LoggerFactory().CreateLogger<MainWindowViewModel>();
-                _characterState = new CharacterState(new LoggerFactory()); // Utwórz pusty stan
+                _characterState = new CharacterState(new LoggerFactory());
                 _scopeManager = new ScopeManager(new LoggerFactory(), _characterState);
 
-                // Przykładowe dane dla zakładki Stats
                 _characterStatsList.Add(new KeyValuePair<string, string>("HP", "100 / 100"));
                 _characterStatsList.Add(new KeyValuePair<string, string>("Mana", "50 / 50"));
                 _characterStatsList.Add(new KeyValuePair<string, string>("Strength", "25"));
-                // Przykładowe dane dla mapy
-                // _mapObjects.Add(new MapObjectViewModel { MapX = 120 * MapScale, MapY = 130 * MapScale, Color = Brushes.Yellow, ToolTipText = "Self @ (120,130)", Size = 8 });
-                // _mapObjects.Add(new MapObjectViewModel { MapX = 125 * MapScale, MapY = 135 * MapScale, Color = Brushes.Red, ToolTipText = "OtherPlayer @ (125,135)" });
-                // _mapObjects.Add(new MapObjectViewModel { MapX = 110 * MapScale, MapY = 110 * MapScale, Color = Brushes.LightBlue, ToolTipText = "Guard @ (110,110)" });
-
             }
             else
             {
                 _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
                 _logger = _loggerFactory.CreateLogger<MainWindowViewModel>();
                 _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-                // CharacterState i ScopeManager są teraz tworzone tutaj
                 _characterState = new CharacterState(_loggerFactory);
                 _scopeManager = new ScopeManager(_loggerFactory, _characterState);
             }
         }
 
-
         /// <summary>
-        /// Inicjalizuje i uruchamia SimpleLoginClient w osobnym wątku.
+        /// Initializes and starts the SimpleLoginClient in a separate task.
         /// </summary>
         public void InitializeClient()
         {
-            _client = new SimpleLoginClient(_loggerFactory, _settings, this, _characterState, _scopeManager); // Przekaż ViewModel do klienta
+            _client = new SimpleLoginClient(_loggerFactory, _settings, this, _characterState, _scopeManager);
             Task.Run(() => _client.RunAsync());
         }
 
-        // --- Metody do aktualizacji UI z innych wątków ---
+        // --- Methods to update UI from other threads ---
+
+        /// <summary>
+        /// Updates the connection state and notifies dependent properties and commands.
+        /// </summary>
+        /// <param name="newState">The new client connection state.</param>
         public void UpdateConnectionState(ClientConnectionState newState)
         {
             Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (_currentState == newState) return;
-                bool oldIsInGame = IsInGame;
+
                 SetProperty(ref _currentState, newState, nameof(CurrentState));
 
                 OnPropertyChanged(nameof(WindowTitle));
                 OnPropertyChanged(nameof(ConnectionStatus));
                 OnPropertyChanged(nameof(CharacterInfo));
-                OnPropertyChanged(nameof(IsInGame)); // Powiadom, jeśli stan gry się zmienił
+                OnPropertyChanged(nameof(IsInGame));
 
-                // Aktualizuj CanExecute dla WSZYSTKICH komend zależnych od stanu
                 ConnectServerCommand.NotifyCanExecuteChanged();
                 RefreshServersCommand.NotifyCanExecuteChanged();
                 ConnectGameServerCommand.NotifyCanExecuteChanged();
-                SelectCharacterCommand.NotifyCanExecuteChanged(); // WAŻNE: Aktualizuj CanExecute tutaj
+                SelectCharacterCommand.NotifyCanExecuteChanged();
                 PickupNearestCommand.NotifyCanExecuteChanged();
                 ShowStatsCommand.NotifyCanExecuteChanged();
                 ShowInventoryCommand.NotifyCanExecuteChanged();
                 ShowSkillsCommand.NotifyCanExecuteChanged();
                 SendInputCommand.NotifyCanExecuteChanged();
-                OnPropertyChanged(nameof(CanInteractWithServerList)); // Aktualizuj też tę właściwość
+                OnPropertyChanged(nameof(CanInteractWithServerList));
 
-                // Dodaj logowanie dostępnych komend w zależności od stanu
                 switch (newState)
                 {
                     case ClientConnectionState.ConnectedToGameServer:
-                        // Stan po zalogowaniu, przed wyborem postaci
                         AddLogMessage("Connected to Game Server. Select a character using the 'Characters' tab and the 'Select Character' button.", LogLevel.Information);
                         break;
                     case ClientConnectionState.InGame:
-                        // Stan po wejściu do gry
                         AddLogMessage("Entered game world. Available commands: scope, move, walk, walkto, pickup, stats, inv, skills, clearlog, exit.", LogLevel.Information);
                         break;
                     case ClientConnectionState.ReceivedServerList:
                         AddLogMessage("Server list received. Select a server in the 'Servers' tab and press 'Connect Game Server'. Or type 'refresh'.", LogLevel.Information);
                         break;
                     case ClientConnectionState.ConnectedToConnectServer:
-                        // Informacja pojawia się już po połączeniu, ale można dodać przypomnienie
                         AddLogMessage("Connected to Connect Server. Waiting for server list or type 'refresh'.", LogLevel.Debug);
                         break;
                     case ClientConnectionState.Disconnected:
                         AddLogMessage("Disconnected. Use 'Connect Server' button to reconnect.", LogLevel.Warning);
+                        ServerList.Clear(); CharacterList.Clear(); ScopeItems.Clear();
+                        InventoryItems.Clear(); SkillItems.Clear();
                         break;
-                }
-
-                if (newState == ClientConnectionState.Disconnected)
-                {
-                    ServerList.Clear(); CharacterList.Clear(); ScopeItems.Clear();
-                    InventoryItems.Clear(); SkillItems.Clear();
                 }
             });
         }
 
+        /// <summary>
+        /// Adds a log message to the UI log display.
+        /// </summary>
+        /// <param name="message">The log message.</param>
+        /// <param name="level">The log level.</param>
         public void AddLogMessage(string message, LogLevel level = LogLevel.Information)
         {
-            // Prosty przykład formatowania (można rozbudować)
             string prefix = level switch
             {
                 LogLevel.Error => "[ERROR] ",
@@ -259,7 +259,6 @@ namespace MuOnlineConsole.GUI.ViewModels
                 if (LogMessages.Count >= maxLogMessages) { LogMessages.RemoveAt(0); }
                 LogMessages.Add(fullMessage);
 
-                // Jeśli auto-scroll jest włączony, wywołaj zdarzenie
                 if (IsAutoScrollEnabled)
                 {
                     ScrollToLogEndRequested?.Invoke(this, EventArgs.Empty);
@@ -267,6 +266,10 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
+        /// <summary>
+        /// Displays the list of servers in the UI.
+        /// </summary>
+        /// <param name="servers">The list of server information.</param>
         public void DisplayServerList(List<ServerInfo> servers)
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -276,10 +279,14 @@ namespace MuOnlineConsole.GUI.ViewModels
                {
                    ServerList.Add(new ServerInfoViewModel { ServerId = server.ServerId, LoadPercentage = server.LoadPercentage });
                }
-               SelectedServer = null; // Wyczyść zaznaczenie
+               SelectedServer = null;
            });
         }
 
+        /// <summary>
+        /// Displays the list of characters in the UI.
+        /// </summary>
+        /// <param name="characters">The list of character name and class pairs.</param>
         public void DisplayCharacterList(List<(string Name, CharacterClassNumber Class)> characters)
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -289,14 +296,11 @@ namespace MuOnlineConsole.GUI.ViewModels
                 {
                     CharacterList.Add(new CharacterInfoViewModel { Name = character.Name, Class = character.Class });
                 }
-                SelectedCharacter = null; // Wyczyść zaznaczenie
+                SelectedCharacter = null;
 
-                // Powiadom o zmianie CanExecute PO wypełnieniu listy
                 SelectCharacterCommand.NotifyCanExecuteChanged();
-                // Zaktualizuj też właściwość, od której zależy widoczność (jeśli używasz jej zamiast CanExecute)
                 OnPropertyChanged(nameof(CanSelectCharacter));
 
-                // Dodaj log po otrzymaniu listy
                 if (characters.Any())
                 {
                     AddLogMessage("Character list received. Select a character using the 'Characters' tab and the 'Select Character' button.", LogLevel.Information);
@@ -309,22 +313,26 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
+        /// <summary>
+        /// Updates the character state display properties.
+        /// </summary>
         public void UpdateCharacterStateDisplay()
         {
             Dispatcher.UIThread.InvokeAsync(() =>
             {
-                // Wywołaj OnPropertyChanged dla właściwości, które zależą od _characterState
                 OnPropertyChanged(nameof(CharacterInfo));
                 OnPropertyChanged(nameof(WindowTitle));
                 OnPropertyChanged(nameof(IsInGame));
 
-                // Wymuś aktualizację kolekcji (jeśli nie są automatycznie odświeżane)
                 UpdateInventoryDisplay();
                 UpdateSkillsDisplay();
-                UpdateStatsDisplay(); // Jeśli masz oddzielną właściwość dla sformatowanych statystyk
+                UpdateStatsDisplay();
             });
         }
 
+        /// <summary>
+        /// Updates the scope items display in the UI.
+        /// </summary>
         public void UpdateScopeDisplay()
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -332,26 +340,24 @@ namespace MuOnlineConsole.GUI.ViewModels
                ScopeItems.Clear();
                foreach (var item in _scopeManager.GetScopeItems(ScopeObjectType.Player)) ScopeItems.Add(item.ToString());
                foreach (var item in _scopeManager.GetScopeItems(ScopeObjectType.Npc)) ScopeItems.Add(item.ToString());
-               foreach (var item in _scopeManager.GetScopeItems(ScopeObjectType.Monster)) ScopeItems.Add(item.ToString()); // Jeśli rozróżniasz
+               foreach (var item in _scopeManager.GetScopeItems(ScopeObjectType.Monster)) ScopeItems.Add(item.ToString());
                foreach (var item in _scopeManager.GetScopeItems(ScopeObjectType.Item)) ScopeItems.Add(item.ToString());
                foreach (var item in _scopeManager.GetScopeItems(ScopeObjectType.Money)) ScopeItems.Add(item.ToString());
-               // Sortuj dla czytelności?
-               // var sortedItems = ScopeItems.OrderBy(s => s).ToList();
-               // ScopeItems.Clear(); foreach(var s in sortedItems) ScopeItems.Add(s);
            });
         }
 
+        /// <summary>
+        /// Updates the inventory items display in the UI.
+        /// </summary>
         public void UpdateInventoryDisplay()
         {
-            // Upewnij się, że wywołujesz to w wątku UI
             Dispatcher.UIThread.InvokeAsync(() =>
             {
-                InventoryItems.Clear(); // Wyczyść starą listę
+                InventoryItems.Clear();
                 InventoryItems.Add($"Zen: {_characterState.InventoryZen:N0}");
                 InventoryItems.Add($"Expansion: {_characterState.InventoryExpansionState}");
                 InventoryItems.Add("--- Items ---");
 
-                // Pobierz aktualne itemy ze stanu postaci
                 var currentItems = _characterState.GetInventoryItems();
                 if (!currentItems.Any())
                 {
@@ -359,18 +365,19 @@ namespace MuOnlineConsole.GUI.ViewModels
                 }
                 else
                 {
-                    // Iteruj po posortowanych slotach
                     foreach (var kvp in currentItems.OrderBy(kv => kv.Key))
                     {
-                        // Użyj metody formatującej z CharacterState
                         string formattedItem = _characterState.FormatInventoryItem(kvp.Key, kvp.Value);
                         InventoryItems.Add(formattedItem);
                     }
                 }
-                InventoryItems.Add("-------------"); // Dodaj separator na końcu
+                InventoryItems.Add("-------------");
             });
         }
 
+        /// <summary>
+        /// Updates the skills display in the UI.
+        /// </summary>
         public void UpdateSkillsDisplay()
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -378,13 +385,15 @@ namespace MuOnlineConsole.GUI.ViewModels
                SkillItems.Clear();
                foreach (var skill in _characterState.GetSkills())
                {
-                   // TODO: Lookup skill name
                    SkillItems.Add($"ID: {skill.SkillId,-5} Lvl: {skill.SkillLevel,-2}");
                }
                if (!SkillItems.Any()) SkillItems.Add("(No skills)");
            });
         }
 
+        /// <summary>
+        /// Updates the character stats display in the UI.
+        /// </summary>
         public void UpdateStatsDisplay()
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -398,18 +407,20 @@ namespace MuOnlineConsole.GUI.ViewModels
                         CharacterStatsList.Add(stat);
                     }
                 }
-                // Powiadom też inne właściwości zależne od statystyk
                 OnPropertyChanged(nameof(CharacterInfo));
                 OnPropertyChanged(nameof(WindowTitle));
-                OnPropertyChanged(nameof(CharacterStatsDisplay)); // Nadal aktualizuj podgląd w prawej kolumnie
+                OnPropertyChanged(nameof(CharacterStatsDisplay));
             });
         }
 
+        /// <summary>
+        /// Adds or updates a map object on the map display.
+        /// </summary>
+        /// <param name="scopeObject">The scope object to add or update.</param>
         public void AddOrUpdateMapObject(ScopeObject scopeObject)
         {
             if (scopeObject == null) return;
 
-            // Log BEFORE InvokeAsync
             _logger.LogDebug("--> VM.AddOrUpdate: Received ScopeObject ID={Id:X4}, Type={Type}, OriginalPos=({X},{Y}). Current MapScale={Scale:F2}",
                 scopeObject.Id, scopeObject.ObjectType, scopeObject.PositionX, scopeObject.PositionY, MapScale);
 
@@ -419,7 +430,7 @@ namespace MuOnlineConsole.GUI.ViewModels
                 if (_mapObjectDictionary.TryGetValue(scopeObject.Id, out var existingMapObject))
                 {
                     existingMapObject.UpdatePosition(scopeObject.PositionX, scopeObject.PositionY, MapScale);
-                    if (isSelf) CalculateCanvasMargin(); // <--- PRZYWRÓCONE
+                    if (isSelf) CalculateCanvasMargin();
                 }
                 else
                 {
@@ -430,7 +441,7 @@ namespace MuOnlineConsole.GUI.ViewModels
                         if (_mapObjectDictionary.TryAdd(scopeObject.Id, newMapObject))
                         {
                             MapObjects.Add(newMapObject);
-                            if (isSelf) CalculateCanvasMargin(); // <--- PRZYWRÓCONE
+                            if (isSelf) CalculateCanvasMargin();
                         }
                         else
                         {
@@ -445,27 +456,32 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
-        // Przywróć wywołania CalculateCanvasMargin
         partial void OnMapScaleChanged(double oldValue, double newValue)
         {
             OnPropertyChanged(nameof(MapWidth));
             OnPropertyChanged(nameof(MapHeight));
             UpdateAllMapObjectScales();
-            CalculateCanvasMargin(); // <--- PRZYWRÓCONE
+            CalculateCanvasMargin();
         }
 
-        public void UpdateMapContainerSize(Size newSize) // Ta metoda pozostaje poprawna
+        /// <summary>
+        /// Updates the size of the map container and recalculates the scale.
+        /// </summary>
+        /// <param name="newSize">The new size of the map container.</param>
+        public void UpdateMapContainerSize(Size newSize)
         {
             if (_currentMapContainerSize != newSize && newSize.Width > 1 && newSize.Height > 1)
             {
                 _logger.LogDebug("Updating MapContainerSize from {OldSize} to {NewSize}", _currentMapContainerSize, newSize);
                 _currentMapContainerSize = newSize;
-                RecalculateScaleOnly(); // To wywoła OnMapScaleChanged -> CalculateCanvasMargin
+                RecalculateScaleOnly();
             }
         }
 
-        // Przelicza tylko skalę
-        private void RecalculateScaleOnly() // Ta metoda pozostaje poprawna
+        /// <summary>
+        /// Recalculates the map scale based on the current container size.
+        /// </summary>
+        private void RecalculateScaleOnly()
         {
             const double mapSizeInTiles = 255.0;
             if (_currentMapContainerSize.Width <= 1 || _currentMapContainerSize.Height <= 1 || mapSizeInTiles <= 0) { return; }
@@ -476,7 +492,9 @@ namespace MuOnlineConsole.GUI.ViewModels
             else { _logger.LogTrace("Skipping MapScale update, change too small."); }
         }
 
-        // === PRZYWRÓĆ METODĘ ===
+        /// <summary>
+        /// Calculates the canvas margin to keep the player centered on the map.
+        /// </summary>
         private void CalculateCanvasMargin()
         {
             if (_mapObjectDictionary.TryGetValue(_characterState.Id, out var playerObject) && _currentMapContainerSize != default(Size) && _currentMapContainerSize.Width > 0 && _currentMapContainerSize.Height > 0)
@@ -496,11 +514,14 @@ namespace MuOnlineConsole.GUI.ViewModels
             else
             {
                 _logger.LogTrace("Cannot calculate canvas margin: Player object (ID {PlayerId:X4}) not found or container size is zero/default.", _characterState.Id);
-                CanvasMargin = new Thickness(0); // Ustaw domyślny margines
+                CanvasMargin = new Thickness(0);
             }
         }
-        // === KONIEC ===
 
+        /// <summary>
+        /// Removes a map object from the display.
+        /// </summary>
+        /// <param name="maskedId">The masked ID of the object to remove.</param>
         public void RemoveMapObject(ushort maskedId)
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -512,9 +533,14 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
+        /// <summary>
+        /// Updates the position of a map object on the display.
+        /// </summary>
+        /// <param name="maskedId">The masked ID of the object.</param>
+        /// <param name="x">The new X coordinate.</param>
+        /// <param name="y">The new Y coordinate.</param>
         public void UpdateMapObjectPosition(ushort maskedId, byte x, byte y)
         {
-            // Log BEFORE InvokeAsync
             _logger.LogDebug("--> VM.UpdatePosition: Received ID={Id:X4}, NewPos=({X},{Y}). Current MapScale={Scale:F2}",
                 maskedId, x, y, MapScale);
 
@@ -523,7 +549,7 @@ namespace MuOnlineConsole.GUI.ViewModels
                 if (_mapObjectDictionary.TryGetValue(maskedId, out var mapObject))
                 {
                     mapObject.UpdatePosition(x, y, MapScale);
-                    if (maskedId == _characterState.Id) { CalculateCanvasMargin(); } // <--- PRZYWRÓCONE
+                    if (maskedId == _characterState.Id) { CalculateCanvasMargin(); }
                 }
                 else
                 {
@@ -532,6 +558,10 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
+        /// <summary>
+        /// Clears all map objects from the display. Optionally keeps the player object.
+        /// </summary>
+        /// <param name="clearSelf">If true, also removes the player object.</param>
         public void ClearMapObjects(bool clearSelf = false)
         {
             Dispatcher.UIThread.InvokeAsync(() =>
@@ -547,7 +577,7 @@ namespace MuOnlineConsole.GUI.ViewModels
                     {
                         MapObjects.Clear();
                         _mapObjectDictionary.Clear();
-                        MapObjects.Add(self); // Dodaj siebie z powrotem
+                        MapObjects.Add(self);
                         _mapObjectDictionary.TryAdd(self.Id, self);
                     }
                     else
@@ -559,7 +589,11 @@ namespace MuOnlineConsole.GUI.ViewModels
             });
         }
 
-
+        /// <summary>
+        /// Creates a MapObjectViewModel from a ScopeObject.
+        /// </summary>
+        /// <param name="scopeObject">The scope object.</param>
+        /// <returns>A new MapObjectViewModel or null if the type is unknown.</returns>
         private MapObjectViewModel? CreateMapObjectViewModel(ScopeObject scopeObject)
         {
             string toolTipBase = "";
@@ -587,7 +621,6 @@ namespace MuOnlineConsole.GUI.ViewModels
                     return null;
             }
 
-            // --- Use Constructor ---
             var viewModel = new MapObjectViewModel(
                 id: scopeObject.Id,
                 rawId: scopeObject.RawId,
@@ -595,55 +628,51 @@ namespace MuOnlineConsole.GUI.ViewModels
                 initialX: scopeObject.PositionX,
                 initialY: scopeObject.PositionY
             );
-            // --- End Constructor Use ---
 
-            // Set remaining properties using standard assignment
             viewModel.Color = color;
             viewModel.Size = size;
             viewModel.ToolTipText = $"{toolTipBase} @ ({scopeObject.PositionX},{scopeObject.PositionY})";
 
-            // Set initial MapX/MapY based on current scale AFTER object creation
             viewModel.MapX = scopeObject.PositionX * MapScale;
-            viewModel.MapY = scopeObject.PositionY * MapScale;
+            viewModel.MapY = (MaxMapCoordinate - scopeObject.PositionY) * MapScale;
 
             return viewModel;
         }
 
-        // Komendy Zoom - zmodyfikuj, aby używały MinMapScale
-        [RelayCommand]
-        private void ZoomInMap()
-        {
-            MapScale = Math.Min(MapScale * ScaleStep, MaxMapScale);
-            // OnMapScaleChanged zajmie się resztą (UpdateAllMapObjectScales + CalculateCanvasMargin)
-            AddLogMessage($"Map zoomed in (Scale: {MapScale:F1})", LogLevel.Debug);
-        }
-
-        [RelayCommand]
-        private void ZoomOutMap()
-        {
-            MapScale = Math.Max(MapScale / ScaleStep, MinMapScale); // Użyj MinMapScale
-            // OnMapScaleChanged zajmie się resztą
-            AddLogMessage($"Map zoomed out (Scale: {MapScale:F1})", LogLevel.Debug);
-        }
-
-        private void UpdateAllMapObjectScales() // Wywoływana przy zmianie MapScale
+        /// <summary>
+        /// Updates the scale for all map object view models.
+        /// </summary>
+        private void UpdateAllMapObjectScales()
         {
             _logger.LogDebug("Updating all map object scales to: {NewScale:F2}", MapScale);
             foreach (var mapObj in _mapObjectDictionary.Values)
             {
                 mapObj.UpdateScale(MapScale);
             }
-            CalculateCanvasMargin(); // <--- PRZYWRÓCONE (lub upewnij się, że jest wywoływane przez OnMapScaleChanged)
+            CalculateCanvasMargin();
         }
 
-        // --- Komendy dla UI ---
+        // --- Commands for UI interaction ---
+
+        [RelayCommand]
+        private void ZoomInMap()
+        {
+            MapScale = Math.Min(MapScale * ScaleStep, MaxMapScale);
+            AddLogMessage($"Map zoomed in (Scale: {MapScale:F1})", LogLevel.Debug);
+        }
+
+        [RelayCommand]
+        private void ZoomOutMap()
+        {
+            MapScale = Math.Max(MapScale / ScaleStep, MinMapScale);
+            AddLogMessage($"Map zoomed out (Scale: {MapScale:F1})", LogLevel.Debug);
+        }
 
         [RelayCommand(CanExecute = nameof(CanConnectServer))]
         private async Task ConnectServer()
         {
             AddLogMessage("Attempting to connect to Connect Server...");
-            // Wywołaj metodę w kliencie, która rozpocznie połączenie
-            if (_client != null) await _client.ConnectToConnectServerAsync(); // TODO: Adapt Client to allow reconnection
+            if (_client != null) await _client.ConnectToConnectServerAsync();
             else AddLogMessage("Client not initialized.", LogLevel.Error);
         }
 
@@ -661,8 +690,7 @@ namespace MuOnlineConsole.GUI.ViewModels
             if (SelectedServer != null)
             {
                 AddLogMessage($"Connecting to Game Server ID {SelectedServer.ServerId}...");
-                // Wywołaj metodę w kliencie, która zainicjuje przełączenie
-                if (_client != null) await _client.HandleServerSelectionAsync(SelectedServer.ServerId); // TODO: Expose this or similar logic
+                if (_client != null) await _client.HandleServerSelectionAsync(SelectedServer.ServerId);
                 else AddLogMessage("Client not initialized.", LogLevel.Error);
             }
             else { AddLogMessage("No server selected.", LogLevel.Warning); }
@@ -676,7 +704,6 @@ namespace MuOnlineConsole.GUI.ViewModels
                 AddLogMessage($"Selecting character: {SelectedCharacter.Name}...", LogLevel.Information);
                 if (_client != null)
                 {
-                    // Użyj ProcessCommandAsync, aby zachować spójność obsługi komend
                     await _client.ProcessCommandAsync($"select {SelectedCharacter.Name}");
                 }
                 else AddLogMessage("Client not initialized.", LogLevel.Error);
@@ -687,10 +714,9 @@ namespace MuOnlineConsole.GUI.ViewModels
         [RelayCommand(CanExecute = nameof(IsInGame))]
         private async Task PickupNearest()
         {
-            AddLogMessage("Attempting to pick up nearest item...", LogLevel.Information); // Loguj zamiar
+            AddLogMessage("Attempting to pick up nearest item...", LogLevel.Information);
             if (_client != null)
             {
-                // Wywołaj publiczną metodę przetwarzania komend, symulując wpisanie "pickup near"
                 await _client.ProcessCommandAsync("pickup near");
             }
             else
@@ -703,21 +729,19 @@ namespace MuOnlineConsole.GUI.ViewModels
         private void ShowStats()
         {
             AddLogMessage("--- Character Stats ---", LogLevel.Information);
-            AddLogMessage(_characterState.GetStatsDisplay(), LogLevel.Information); // GetStatsDisplay już jest publiczne
+            AddLogMessage(_characterState.GetStatsDisplay(), LogLevel.Information);
             AddLogMessage("-----------------------", LogLevel.Information);
 
-            // Aktualizuj dedykowaną właściwość, jeśli ją masz
             UpdateStatsDisplay();
         }
 
         [RelayCommand(CanExecute = nameof(IsInGame))]
         private void ShowInventory()
         {
-            AddLogMessage("--- Inventory ---", LogLevel.Information); // Loguj do konsoli UI
+            AddLogMessage("--- Inventory ---", LogLevel.Information);
             AddLogMessage(_characterState.GetInventoryDisplay(), LogLevel.Information);
             AddLogMessage("-----------------", LogLevel.Information);
 
-            // Wywołaj aktualizację zakładki Inventory
             UpdateInventoryDisplay();
         }
 
@@ -728,24 +752,21 @@ namespace MuOnlineConsole.GUI.ViewModels
             AddLogMessage(_characterState.GetSkillListDisplay(), LogLevel.Information);
             AddLogMessage("------------------", LogLevel.Information);
 
-            // Wywołaj aktualizację zakładki Skills
             UpdateSkillsDisplay();
         }
-
 
         [RelayCommand]
         private async Task SendInput(string? inputText)
         {
             if (!string.IsNullOrWhiteSpace(inputText))
             {
-                AddLogMessage($"CMD> {inputText}"); // Dodaj polecenie do logu
+                AddLogMessage($"CMD> {inputText}");
                 if (_client != null)
                 {
-                    // Wywołaj metodę przetwarzania komend w kliencie
-                    await _client.ProcessCommandAsync(inputText); // TODO: Make ProcessCommandAsync public or create a new public method
+                    await _client.ProcessCommandAsync(inputText);
                 }
                 else AddLogMessage("Client not initialized.", LogLevel.Error);
-                InputText = string.Empty; // Wyczyść pole tekstowe po wysłaniu
+                InputText = string.Empty;
             }
         }
     }

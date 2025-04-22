@@ -1,72 +1,99 @@
-using Avalonia.Media; // Dla Brush
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
+using System;
 
 namespace MuOnlineConsole.GUI.ViewModels
 {
-    // Typy obiektów dla mapy (może być bardziej szczegółowe niż ScopeObjectType)
+    /// <summary>
+    /// Defines the type of object displayed on the map.
+    /// </summary>
     public enum MapObjectType { PlayerSelf, PlayerOther, NpcMerchant, NpcGuard, NpcQuest, MonsterNormal, MonsterBoss, Item, Money, Unknown }
 
+    /// <summary>
+    /// View model for a single object displayed on the map.
+    /// </summary>
     public partial class MapObjectViewModel : ObservableObject
     {
-        // ... Observable properties for MapX, MapY, Size, Color, ToolTipText ...
+        // Observable properties for UI binding
         [ObservableProperty] private double _mapX;
         [ObservableProperty] private double _mapY;
         [ObservableProperty] private double _size = 5;
         [ObservableProperty] private IBrush _color = Brushes.Gray;
         [ObservableProperty] private string? _toolTipText;
 
-        // --- Init-only properties ---
+        // Properties initialized once
         public ushort Id { get; init; }
         public ushort RawId { get; init; }
         public MapObjectType ObjectType { get; init; }
 
-        // --- Properties for Original Position - Keep 'private set' ---
+        // Original game position
         public byte OriginalX { get; private set; }
         public byte OriginalY { get; private set; }
-        // --- End of change ---
 
+        // Maximum map coordinate (assuming 255)
+        private const byte MaxMapCoordinate = 255;
 
-        // --- ADD CONSTRUCTOR ---
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MapObjectViewModel"/> class.
+        /// </summary>
+        /// <param name="id">The object's unique ID.</param>
+        /// <param name="rawId">The object's raw ID.</param>
+        /// <param name="objectType">The type of map object.</param>
+        /// <param name="initialX">The initial X coordinate in game units.</param>
+        /// <param name="initialY">The initial Y coordinate in game units.</param>
         public MapObjectViewModel(ushort id, ushort rawId, MapObjectType objectType, byte initialX, byte initialY)
         {
             Id = id;
             RawId = rawId;
             ObjectType = objectType;
-            OriginalX = initialX; // Set via constructor
-            OriginalY = initialY; // Set via constructor
+            OriginalX = initialX;
+            OriginalY = initialY;
         }
-        // --- END OF CONSTRUCTOR ---
 
-        // UpdatePosition CAN NOW set OriginalX/Y because it's inside the class
+        /// <summary>
+        /// Updates the position of the map object based on new game coordinates and the current map scale.
+        /// Calculates the MapY by inverting the Y coordinate.
+        /// </summary>
+        /// <param name="x">The new X coordinate in game units.</param>
+        /// <param name="y">The new Y coordinate in game units.</param>
+        /// <param name="scale">The current map scale.</param>
         public void UpdatePosition(byte x, byte y, double scale)
         {
-            byte oldX = OriginalX;
-            byte oldY = OriginalY;
-            double oldMapX = MapX;
-            double oldMapY = MapY;
-
-            // This assignment IS VALID because it's inside MapObjectViewModel
             OriginalX = x;
             OriginalY = y;
 
             double newMapX = x * scale;
-            double newMapY = y * scale;
+            double newMapY = (MaxMapCoordinate - y) * scale;
 
-            Console.WriteLine($"[MapObj UpdatePosition] ID {Id:X4}: Input Pos=({x},{y}), Scale={scale:F2}. Calculated MapPos=({newMapX:F2},{newMapY:F2}). Old OriginalPos=({oldX},{oldY}), Old MapPos=({oldMapX:F2},{oldMapY:F2})");
+            // Console.WriteLine($"[MapObj UpdatePosition] ID {Id:X4}: Input Pos=({x},{y}), Scale={scale:F2}. Calculated MapPos=({newMapX:F2},{newMapY:F2})");
 
             MapX = newMapX;
             MapY = newMapY;
-            ToolTipText = $"{ToolTipText?.Split('@')[0].Trim()} @ ({x},{y})";
+
+            // Update tooltip text while keeping the prefix
+            if (!string.IsNullOrEmpty(ToolTipText))
+            {
+                var parts = ToolTipText.Split('@');
+                ToolTipText = $"{parts[0].Trim()} @ ({x},{y})";
+            }
+            else
+            {
+                // Fallback if ToolTipText was not set initially (should not happen with current logic)
+                ToolTipText = $"Unknown Object ID={Id:X4} @ ({x},{y})";
+            }
         }
 
+        /// <summary>
+        /// Updates the scale of the map object based on the new map scale.
+        /// Calculates the MapX and MapY based on the stored original position and the new scale.
+        /// </summary>
+        /// <param name="newScale">The new map scale.</param>
         public void UpdateScale(double newScale)
         {
-            double oldMapX = MapX;
-            double oldMapY = MapY;
-            double newMapX = OriginalX * newScale; // Uses the current OriginalX
-            double newMapY = OriginalY * newScale; // Uses the current OriginalY
+            double newMapX = OriginalX * newScale;
+            double newMapY = (MaxMapCoordinate - OriginalY) * newScale; // Invert Y
 
-            Console.WriteLine($"[MapObj UpdateScale] ID {Id:X4}: OriginalPos=({OriginalX},{OriginalY}), NewScale={newScale:F2}. Calculated MapPos=({newMapX:F2},{newMapY:F2}). Old MapPos=({oldMapX:F2},{oldMapY:F2})");
+            // Console.WriteLine($"[MapObj UpdateScale] ID {Id:X4}: OriginalPos=({OriginalX},{OriginalY}), NewScale={newScale:F2}. Calculated MapPos=({newMapX:F2},{newMapY:F2})");
 
             MapX = newMapX;
             MapY = newMapY;

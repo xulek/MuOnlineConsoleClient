@@ -5,186 +5,225 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:converters="using:MuOnlineConsole.GUI.Converters"
         xmlns:clientEnums="using:MuOnlineConsole.Client"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        mc:Ignorable="d"
+        d:DesignWidth="800"
+        d:DesignHeight="600"
         x:Class="MuOnlineConsole.GUI.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="{Binding WindowTitle}">
 
+    <!-- Design-time DataContext for previewing in designer -->
     <Design.DataContext>
-      <vm:MainWindowViewModel DesignMode="True"/>
+        <vm:MainWindowViewModel DesignMode="True"/>
     </Design.DataContext>
 
-  <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
-    <!-- Menu/Info Area (Top) -->
-    <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="10" Margin="5">
-       <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center"/>
-       <TextBlock Text="|" VerticalAlignment="Center"/>
-       <TextBlock Text="{Binding CharacterInfo}" VerticalAlignment="Center"/>
-    </StackPanel>
+    <!-- Main grid layout with header, content area, and footer -->
+    <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
 
-    <!-- Main Content (Chat/Log/Scope/Lists) -->
-    <TabControl Grid.Row="1" Grid.Column="0" Margin="5">
-            <!-- Zakładka Log/Chat (istniejąca) -->
+        <!-- Header Area (Connection Status and Character Info) -->
+        <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                    Orientation="Horizontal" Spacing="10" Margin="5">
+            <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center"/>
+            <TextBlock Text="|" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding CharacterInfo}" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Main Content Area (TabControl on the left) -->
+        <TabControl Grid.Row="1" Grid.Column="0" Margin="5">
+
+            <!-- Log/Chat Tab -->
             <TabItem Header="Log/Chat">
                 <DockPanel LastChildFill="True">
-                    <CheckBox DockPanel.Dock="Top" Margin="2" Content="Auto-scroll" IsChecked="{Binding IsAutoScrollEnabled}"/>
+                    <CheckBox DockPanel.Dock="Top" Margin="2"
+                              Content="Auto-scroll"
+                              IsChecked="{Binding IsAutoScrollEnabled}"/>
                     <ScrollViewer VerticalScrollBarVisibility="Auto" x:Name="LogScrollViewer">
                         <ItemsControl ItemsSource="{Binding LogMessages}">
-                            <ItemsControl.ItemTemplate> <DataTemplate> <TextBlock Text="{Binding}" Margin="2" TextWrapping="Wrap"/> </DataTemplate> </ItemsControl.ItemTemplate>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" Margin="2" TextWrapping="Wrap"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
                 </DockPanel>
             </TabItem>
 
-            <!-- Zakładka Scope (istniejąca, teraz może być mniej potrzebna) -->
+            <!-- Scope Tab (Displays objects in character's scope) -->
             <TabItem Header="Scope">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding ScopeItems}">
-                        <ItemsControl.ItemTemplate> <DataTemplate> <TextBlock Text="{Binding}" Margin="2"/> </DataTemplate> </ItemsControl.ItemTemplate>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" Margin="2"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
             </TabItem>
 
-            <!-- Zakładka Inventory (istniejąca) -->
+            <!-- Inventory Tab -->
             <TabItem Header="Inventory">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding InventoryItems}">
-                        <ItemsControl.ItemTemplate> <DataTemplate> <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/> </DataTemplate> </ItemsControl.ItemTemplate>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
             </TabItem>
 
-             <!-- Zakładka Skills (istniejąca) -->
+            <!-- Skills Tab -->
             <TabItem Header="Skills">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding SkillItems}">
-                         <ItemsControl.ItemTemplate> <DataTemplate> <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/> </DataTemplate> </ItemsControl.ItemTemplate>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
             </TabItem>
 
-            <!-- NOWA: Zakładka Stats -->
+            <!-- Stats Tab -->
             <TabItem Header="Stats">
-                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                     <ItemsControl ItemsSource="{Binding CharacterStatsList}" Margin="5">
-                         <ItemsControl.ItemTemplate>
-                             <DataTemplate>
-                                 <Grid ColumnDefinitions="Auto,*" Margin="2">
-                                     <TextBlock Grid.Column="0" Text="{Binding Key}" FontWeight="Bold" Margin="0,0,10,0"/>
-                                     <TextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap"/>
-                                 </Grid>
-                             </DataTemplate>
-                         </ItemsControl.ItemTemplate>
-                     </ItemsControl>
-                 </ScrollViewer>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding CharacterStatsList}" Margin="5">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="Auto,*" Margin="2">
+                                    <TextBlock Grid.Column="0" Text="{Binding Key}" FontWeight="Bold" Margin="0,0,10,0"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
             </TabItem>
 
- <TabItem Header="Map">
-     <DockPanel LastChildFill="True" x:Name="MapDockPanel">
-         <!-- Przyciski Zoom (jeśli je dodałeś, zostaw) -->
-         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="5" Margin="5">
-             <Button Content="Zoom In" Command="{Binding ZoomInMapCommand}"/>
-             <Button Content="Zoom Out" Command="{Binding ZoomOutMapCommand}"/>
-             <TextBlock Text="{Binding MapScale, StringFormat='Scale: {0:F1}'}" VerticalAlignment="Center" Margin="10,0,0,0"/>
-         </StackPanel>
+            <!-- Map Tab -->
+            <TabItem Header="Map">
+                <DockPanel LastChildFill="True" x:Name="MapDockPanel">
+                    <!-- Map Controls (Zoom) -->
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="5" Margin="5">
+                        <Button Content="Zoom In" Command="{Binding ZoomInMapCommand}"/>
+                        <Button Content="Zoom Out" Command="{Binding ZoomOutMapCommand}"/>
+                        <TextBlock Text="{Binding MapScale, StringFormat='Scale: {0:F1}'}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    </StackPanel>
 
-         <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                       VerticalScrollBarVisibility="Auto"
-                       Background="#111111">
-             <!-- Border dla wizualizacji granic -->
-             <Border BorderBrush="DarkGoldenrod" BorderThickness="2" ClipToBounds="True">
-                 <ItemsControl ItemsSource="{Binding MapObjects}">
-                     <ItemsControl.ItemsPanel>
-                         <ItemsPanelTemplate>
-                             <!-- Canvas ma BINDOWANY rozmiar ORAZ MARGINES -->
-                             <Canvas Width="{Binding MapWidth}"
-                                     Height="{Binding MapHeight}"
-                                     Margin="{Binding CanvasMargin}">
-                                 <!-- Tło obrazkowe -->
-                                 <Canvas.Background>
-                                     <ImageBrush Source="avares://MuOnlineConsole/Assets/Maps/Lorencia.webp"
-                                                 Stretch="Fill"/>
-                                 </Canvas.Background>
-                             </Canvas>
-                         </ItemsPanelTemplate>
-                     </ItemsControl.ItemsPanel>
+                    <!-- Map Display Area (Scrollable) -->
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                  Background="#111111">
+                        <!-- Border to visualize map boundaries -->
+                        <Border BorderBrush="DarkGoldenrod" BorderThickness="2" ClipToBounds="True">
+                            <ItemsControl ItemsSource="{Binding MapObjects}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <!-- Canvas for positioning map objects -->
+                                        <!-- Canvas size and margin are bound to ViewModel properties -->
+                                        <Canvas Width="{Binding MapWidth}"
+                                                Height="{Binding MapHeight}"
+                                                Margin="{Binding CanvasMargin}">
+                                            <!-- Map background image -->
+                                            <Canvas.Background>
+                                                <ImageBrush Source="avares://MuOnlineConsole/Assets/Maps/Lorencia.webp" Stretch="Fill"/>
+                                            </Canvas.Background>
+                                        </Canvas>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
 
-                     <!-- ItemTemplate POZOSTAJE z TranslateTransform -->
-                     <ItemsControl.ItemTemplate>
-                         <DataTemplate DataType="vm:MapObjectViewModel">
-                             <Ellipse Width="{Binding Size}"
-                                      Height="{Binding Size}"
-                                      Fill="{Binding Color}"
-                                      ToolTip.Tip="{Binding ToolTipText}">
-                                 <!-- Pozycjonowanie Ellipse za pomocą TranslateTransform -->
-                                 <Ellipse.RenderTransform>
-                                     <TranslateTransform X="{Binding MapX}" Y="{Binding MapY}" />
-                                 </Ellipse.RenderTransform>
-                             </Ellipse>
-                         </DataTemplate>
-                     </ItemsControl.ItemTemplate>
-                 </ItemsControl>
-             </Border>
-         </ScrollViewer>
-     </DockPanel>
- </TabItem>
+                                <!-- Template for individual map objects -->
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="vm:MapObjectViewModel">
+                                        <Ellipse Width="{Binding Size}" Height="{Binding Size}"
+                                                 Fill="{Binding Color}"
+                                                 ToolTip.Tip="{Binding ToolTipText}">
+                                            <!-- Positioning Ellipse using TranslateTransform -->
+                                            <Ellipse.RenderTransform>
+                                                <TranslateTransform X="{Binding MapX}" Y="{Binding MapY}"/>
+                                            </Ellipse.RenderTransform>
+                                        </Ellipse>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+                    </ScrollViewer>
+                </DockPanel>
+            </TabItem>
 
-            <!-- Zakładka Servers (istniejąca) -->
+            <!-- Servers Tab -->
             <TabItem Header="Servers">
                 <ListBox ItemsSource="{Binding ServerList}" SelectedItem="{Binding SelectedServer}">
-                    <ListBox.ItemTemplate> <DataTemplate> <TextBlock Text="{Binding DisplayText}" /> </DataTemplate> </ListBox.ItemTemplate>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayText}"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
                 </ListBox>
             </TabItem>
 
-            <!-- Zakładka Characters (istniejąca) -->
+            <!-- Characters Tab -->
             <TabItem Header="Characters">
                 <ListBox ItemsSource="{Binding CharacterList}" SelectedItem="{Binding SelectedCharacter}">
-                    <ListBox.ItemTemplate> <DataTemplate> <TextBlock Text="{Binding DisplayText}" /> </DataTemplate> </ListBox.ItemTemplate>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayText}"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
                 </ListBox>
             </TabItem>
         </TabControl>
 
-<!-- Stats/Actions Area (Right) -->
-<StackPanel Grid.Row="1" Grid.Column="1" Margin="5" Width="200" Spacing="5">
-    <TextBlock Text="Stats" FontWeight="Bold"/>
-    <TextBlock Text="{Binding CharacterStatsDisplay}" TextWrapping="Wrap"/>
+        <!-- Stats/Actions Area (Right Panel) -->
+        <StackPanel Grid.Row="1" Grid.Column="1" Margin="5" Width="200" Spacing="5">
+            <TextBlock Text="Stats" FontWeight="Bold"/>
+            <!-- Character stats summary display -->
+            <TextBlock Text="{Binding CharacterStatsDisplay}" TextWrapping="Wrap"/>
 
-    <TextBlock Text="Actions" FontWeight="Bold" Margin="0,10,0,0"/>
+            <TextBlock Text="Actions" FontWeight="Bold" Margin="0,10,0,0"/>
 
-    <!-- Przycisk Connect Server (istniejący) -->
-    <Button Content="Connect Server" Command="{Binding ConnectServerCommand}" IsVisible="{Binding CanConnectServer}"/>
+            <!-- Connect Server Button -->
+            <Button Content="Connect Server" Command="{Binding ConnectServerCommand}"
+                    IsVisible="{Binding CanConnectServer}"/>
 
-    <!-- Przyciski Server List -->
-    <StackPanel IsVisible="{Binding CanInteractWithServerList}"> <!-- Nowa właściwość CanInteractWithServerList -->
-        <Button Content="Refresh Servers" Command="{Binding RefreshServersCommand}" Margin="0,5,0,0"/>
-        <Button Content="Connect Game Server" Command="{Binding ConnectGameServerCommand}" IsEnabled="{Binding SelectedServer, Converter={x:Static ObjectConverters.IsNotNull}}" Margin="0,5,0,0"/>
-        <!-- IsEnabled zamiast IsVisible dla przycisku Connect GS, aby pokazać, że trzeba wybrać serwer -->
-    </StackPanel>
+            <!-- Server List related buttons, visible when interaction is possible -->
+            <StackPanel IsVisible="{Binding CanInteractWithServerList}">
+                <Button Content="Refresh Servers" Command="{Binding RefreshServersCommand}" Margin="0,5,0,0"/>
+                <!-- Connect Game Server button, enabled only when a server is selected -->
+                <Button Content="Connect Game Server" Command="{Binding ConnectGameServerCommand}"
+                        IsEnabled="{Binding SelectedServer, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+                        Margin="0,5,0,0"/>
+            </StackPanel>
 
-     <!-- Przycisk Select Character -->
-     <!-- IsVisible kontroluje, czy w ogóle pokazać przycisk (np. tylko gdy połączono z GS) -->
-     <!-- IsEnabled jest kontrolowane przez CanExecute komendy (która sprawdza, czy coś jest wybrane) -->
-    <Button Content="Select Character"
-            Command="{Binding SelectCharacterCommand}"
-            IsVisible="{Binding Path=CurrentState, Converter={x:Static converters:ObjectConverters.IsEqual}, ConverterParameter={x:Static clientEnums:ClientConnectionState.ConnectedToGameServer}}"
-            IsEnabled="{Binding SelectedCharacter, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
-            Margin="0,5,0,0"/>
+            <!-- Select Character button, visible only when connected to a game server -->
+            <!-- Enabled only when a character is selected -->
+            <Button Content="Select Character" Command="{Binding SelectCharacterCommand}"
+                    IsVisible="{Binding CurrentState, Converter={x:Static converters:ObjectConverters.IsEqual}, ConverterParameter={x:Static clientEnums:ClientConnectionState.ConnectedToGameServer}}"
+                    IsEnabled="{Binding SelectedCharacter, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+                    Margin="0,5,0,0"/>
 
-    <!-- Przyciski In-Game (istniejące) -->
-    <StackPanel IsVisible="{Binding IsInGame}">
-         <Button Content="Pickup Nearest" Command="{Binding PickupNearestCommand}" Margin="0,10,0,0"/>
-         <Button Content="Show Stats" Command="{Binding ShowStatsCommand}" Margin="0,5,0,0"/>
-         <Button Content="Show Inventory" Command="{Binding ShowInventoryCommand}" Margin="0,5,0,0"/>
-         <Button Content="Show Skills" Command="{Binding ShowSkillsCommand}" Margin="0,5,0,0"/>
-         <!-- Możesz dodać więcej przycisków dla walk, itp. -->
-     </StackPanel>
+            <!-- In-Game Action Buttons, visible only when character is in game -->
+            <StackPanel IsVisible="{Binding IsInGame}">
+                <Button Content="Pickup Nearest" Command="{Binding PickupNearestCommand}" Margin="0,10,0,0"/>
+                <Button Content="Show Stats" Command="{Binding ShowStatsCommand}" Margin="0,5,0,0"/>
+                <Button Content="Show Inventory" Command="{Binding ShowInventoryCommand}" Margin="0,5,0,0"/>
+                <Button Content="Show Skills" Command="{Binding ShowSkillsCommand}" Margin="0,5,0,0"/>
+                <!-- Add more in-game action buttons here if needed -->
+            </StackPanel>
+        </StackPanel>
 
-</StackPanel>
+        <!-- Input Area (Bottom) -->
+        <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" LastChildFill="True" Margin="5">
+            <!-- Send Button for commands -->
+            <Button DockPanel.Dock="Right" Content="Send"
+                    Command="{Binding SendInputCommand}" CommandParameter="{Binding InputText}"/>
+            <!-- Textbox for user input -->
+            <TextBox Text="{Binding InputText}" Watermark="Enter command..."
+                     KeyDown="InputTextBox_KeyDown"/>
+        </DockPanel>
 
-    <!-- Input Area (Bottom) -->
-    <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" LastChildFill="True" Margin="5">
-        <Button DockPanel.Dock="Right" Content="Send" Command="{Binding SendInputCommand}" CommandParameter="{Binding InputText}"/>
-        <TextBox Text="{Binding InputText}" Watermark="Enter command..." KeyDown="InputTextBox_KeyDown"/>
-    </DockPanel>
-  </Grid>
+    </Grid>
 </Window>
