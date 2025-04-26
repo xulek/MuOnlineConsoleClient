@@ -92,6 +92,12 @@ namespace MuOnlineConsole.GUI.Views
                     _logScrollViewer.PropertyChanged += LogScrollViewer_PropertyChanged;
                 }
 
+                var titleBar = this.FindControl<Border>("TitleBar");
+                if (titleBar != null)
+                {
+                    titleBar.PointerPressed += TitleBar_PointerPressed;
+                }
+
                 // Trigger initial scale calculation after the window is loaded
                 // This ensures the container bounds are available
                 if (this.DataContext is MainWindowViewModel vm)
@@ -152,6 +158,15 @@ namespace MuOnlineConsole.GUI.Views
                 {
                     _isUserScrolling = false;
                 }
+            }
+        }
+
+        private void TitleBar_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                this.BeginMoveDrag(e);
+                _logger?.LogTrace("Window move drag started.");
             }
         }
 

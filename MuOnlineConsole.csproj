@@ -10,12 +10,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pakiety Avalonia -->
-    <PackageReference Include="Avalonia" Version="11.2.7" /> <!-- Użyj najnowszej stabilnej wersji -->
-    <PackageReference Include="Avalonia.Desktop" Version="11.2.7" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.7" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.7" />
-    <!-- Dodaj ten pakiet dla MVVM Helpers -->
+    <PackageReference Include="Avalonia" Version="11.2.8" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.8" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.8" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.8" />
+    <PackageReference Include="Avalonia.Xaml.Behaviors" Version="11.2.7" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
 
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.4" />
@@ -28,12 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Upewnij się, że obrazek mapy jest uwzględniony jako zasób -->
-    <!-- Jeśli ustawiłeś Build Action na AvaloniaResource w IDE, to może nie być konieczne, -->
-    <!-- ale dodanie tego jawnie nie zaszkodzi. Zaktualizuj ścieżkę i nazwę pliku! -->
     <AvaloniaResource Include="Assets\Maps\Lorencia.webp" />
-    <!-- Jeśli masz więcej zasobów w Assets, możesz użyć wzorca: -->
-    <!-- <AvaloniaResource Include="Assets\**" /> -->
   </ItemGroup>
 
   <ItemGroup>

@@ -5,225 +5,1198 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:converters="using:MuOnlineConsole.GUI.Converters"
         xmlns:clientEnums="using:MuOnlineConsole.Client"
+        xmlns:anim="clr-namespace:Avalonia.Animation;assembly=Avalonia.Animation"
         mc:Ignorable="d"
-        d:DesignWidth="800"
-        d:DesignHeight="600"
+        d:DesignWidth="1200"
+        d:DesignHeight="800"
         x:Class="MuOnlineConsole.GUI.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="{Binding WindowTitle}">
+        Title="{Binding WindowTitle}"
+        TransparencyLevelHint="AcrylicBlur"
+        Background="Transparent"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        WindowStartupLocation="CenterScreen">
 
     <!-- Design-time DataContext for previewing in designer -->
     <Design.DataContext>
         <vm:MainWindowViewModel DesignMode="True"/>
     </Design.DataContext>
 
-    <!-- Main grid layout with header, content area, and footer -->
-    <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
+    <!-- Enhanced Resources -->
+    <Window.Resources>
+        <!-- Updated color scheme with richer colors -->
+        <Color x:Key="ThemePrimaryColor">#4F6BED</Color>
+        <Color x:Key="ThemeSecondaryColor">#303443</Color>
+        <Color x:Key="ThemeDarkColor">#1A1A28</Color>
+        <Color x:Key="ThemeLightColor">#E5E5E5</Color>
+        <Color x:Key="ThemeAccentColor">#F5A623</Color>
+        <Color x:Key="ThemeGlowColor">#6B7EFF</Color>
+        
+        <!-- Enhanced brushes -->
+        <SolidColorBrush x:Key="ThemePrimaryBrush" Color="{StaticResource ThemePrimaryColor}"/>
+        <SolidColorBrush x:Key="ThemeSecondaryBrush" Color="{StaticResource ThemeSecondaryColor}"/>
+        <SolidColorBrush x:Key="ThemeDarkBrush" Color="{StaticResource ThemeDarkColor}"/>
+        <SolidColorBrush x:Key="ThemeLightBrush" Color="{StaticResource ThemeLightColor}"/>
+        <SolidColorBrush x:Key="ThemeAccentBrush" Color="{StaticResource ThemeAccentColor}"/>
+        
+        <!-- Linear gradient brushes for more depth -->
+        <LinearGradientBrush x:Key="HeaderGradientBrush" StartPoint="0%,0%" EndPoint="100%,100%">
+            <GradientStop Offset="0" Color="#35384D"/>
+            <GradientStop Offset="1" Color="#292B3B"/>
+        </LinearGradientBrush>
+        
+        <LinearGradientBrush x:Key="ButtonGradientBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+            <GradientStop Offset="0" Color="#5D77F7"/>
+            <GradientStop Offset="1" Color="#4F6BED"/>
+        </LinearGradientBrush>
+        
+        <LinearGradientBrush x:Key="ButtonPressedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+            <GradientStop Offset="0" Color="#3F51B5"/>
+            <GradientStop Offset="1" Color="#303F9F"/>
+        </LinearGradientBrush>
+        
+        <LinearGradientBrush x:Key="SidebarGradientBrush" StartPoint="0%,0%" EndPoint="0%,100%">
+            <GradientStop Offset="0" Color="#32354A"/>
+            <GradientStop Offset="1" Color="#262837"/>
+        </LinearGradientBrush>
+        
+        <!-- Status color brushes -->
+        <SolidColorBrush x:Key="PositiveStatusBrush" Color="#4CAF50"/>
+        <SolidColorBrush x:Key="NegativeStatusBrush" Color="#F44336"/>
+        <SolidColorBrush x:Key="NeutralStatusBrush" Color="#9E9E9E"/>
+        <SolidColorBrush x:Key="WarningStatusBrush" Color="#FFC107"/>
+        <SolidColorBrush x:Key="InfoStatusBrush" Color="#2196F3"/>
+        
+        <!-- Improved button style -->
+        <ControlTheme x:Key="GameActionButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource ButtonGradientBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Effect">
+                <DropShadowEffect OffsetX="0" OffsetY="2" BlurRadius="4" Color="#20000000" />
+            </Setter>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                    <!-- <anim:TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.1"/> -->
+                </Transitions>
+            </Setter>
+            <Setter Property="RenderTransform" Value="none"/>
+            <Style Selector="^:pointerover /template/ ContentPresenter">
+                <Setter Property="Background">
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Offset="0" Color="#6D87FF"/>
+                        <GradientStop Offset="1" Color="#5A76F2"/>
+                    </LinearGradientBrush>
+                </Setter>
+                <Setter Property="Effect">
+                    <DropShadowEffect OffsetX="0" OffsetY="3" BlurRadius="6" Color="#30000000" />
+                </Setter>
+            </Style>
+            <Style Selector="^:pressed /template/ ContentPresenter">
+                <Setter Property="Background" Value="{StaticResource ButtonPressedBrush}"/>
+                <Setter Property="RenderTransform" Value="scale(0.98)"/>
+            </Style>
+            <Style Selector="^:disabled /template/ ContentPresenter">
+                <Setter Property="Background" Value="#BDBDBD"/>
+                <Setter Property="Foreground" Value="#757575"/>
+                <Setter Property="Effect" Value="{x:Null}"/>
+            </Style>
+        </ControlTheme>
+        
+        <!-- Secondary button style -->
+        <ControlTheme x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource GameActionButton}">
+            <Setter Property="Background">
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                    <GradientStop Offset="0" Color="#41445A"/>
+                    <GradientStop Offset="1" Color="#373A4D"/>
+                </LinearGradientBrush>
+            </Setter>
+            <Style Selector="^:pointerover /template/ ContentPresenter">
+                <Setter Property="Background">
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Offset="0" Color="#51546A"/>
+                        <GradientStop Offset="1" Color="#474A5D"/>
+                    </LinearGradientBrush>
+                </Setter>
+            </Style>
+            <Style Selector="^:pressed /template/ ContentPresenter">
+                <Setter Property="Background">
+                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+                        <GradientStop Offset="0" Color="#31344A"/>
+                        <GradientStop Offset="1" Color="#272A3D"/>
+                    </LinearGradientBrush>
+                </Setter>
+            </Style>
+        </ControlTheme>
+        
+        <!-- Text block base style -->
+        <Style x:Key="BaseTextBlock" Selector="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource ThemeLightBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        
+        <!-- Enhanced Item styles -->
+        <Style x:Key="ListItemStyle" Selector="Border">
+            <Setter Property="Margin" Value="0,3"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Background" Value="#22FFFFFF"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Effect">
+                <DropShadowEffect OffsetX="0" OffsetY="1" BlurRadius="2" Color="#15000000" />
+            </Setter>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15"/>
+                </Transitions>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
-        <!-- Header Area (Connection Status and Character Info) -->
-        <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                    Orientation="Horizontal" Spacing="10" Margin="5">
-            <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center"/>
-            <TextBlock Text="|" VerticalAlignment="Center"/>
-            <TextBlock Text="{Binding CharacterInfo}" VerticalAlignment="Center"/>
-        </StackPanel>
+    <!-- Main background with enhanced acrylic effect -->
+    <Panel>
+        <ExperimentalAcrylicBorder IsHitTestVisible="False">
+            <ExperimentalAcrylicBorder.Material>
+                <ExperimentalAcrylicMaterial
+                    BackgroundSource="Digger"
+                    TintColor="{StaticResource ThemeDarkColor}"
+                    TintOpacity="0.9"
+                    MaterialOpacity="0.7" />
+            </ExperimentalAcrylicBorder.Material>
+        </ExperimentalAcrylicBorder>
 
-        <!-- Main Content Area (TabControl on the left) -->
-        <TabControl Grid.Row="1" Grid.Column="0" Margin="5">
+        <!-- Main content with improved layout -->
+        <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*,Auto">
 
-            <!-- Log/Chat Tab -->
-            <TabItem Header="Log/Chat">
-                <DockPanel LastChildFill="True">
-                    <CheckBox DockPanel.Dock="Top" Margin="2"
-                              Content="Auto-scroll"
-                              IsChecked="{Binding IsAutoScrollEnabled}"/>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" x:Name="LogScrollViewer">
-                        <ItemsControl ItemsSource="{Binding LogMessages}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" Margin="2" TextWrapping="Wrap"/>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </DockPanel>
-            </TabItem>
-
-            <!-- Scope Tab (Displays objects in character's scope) -->
-            <TabItem Header="Scope">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding ScopeItems}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding}" Margin="2"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- Inventory Tab -->
-            <TabItem Header="Inventory">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding InventoryItems}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- Skills Tab -->
-            <TabItem Header="Skills">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding SkillItems}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding}" Margin="2" TextWrapping="NoWrap"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- Stats Tab -->
-            <TabItem Header="Stats">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding CharacterStatsList}" Margin="5">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid ColumnDefinitions="Auto,*" Margin="2">
-                                    <TextBlock Grid.Column="0" Text="{Binding Key}" FontWeight="Bold" Margin="0,0,10,0"/>
-                                    <TextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap"/>
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- Map Tab -->
-            <TabItem Header="Map">
-                <DockPanel LastChildFill="True" x:Name="MapDockPanel">
-                    <!-- Map Controls (Zoom) -->
-                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="5" Margin="5">
-                        <Button Content="Zoom In" Command="{Binding ZoomInMapCommand}"/>
-                        <Button Content="Zoom Out" Command="{Binding ZoomOutMapCommand}"/>
-                        <TextBlock Text="{Binding MapScale, StringFormat='Scale: {0:F1}'}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+            <!-- Enhanced Header Area -->
+            <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" x:Name="TitleBar"
+                    Background="{StaticResource HeaderGradientBrush}"
+                    BorderBrush="{StaticResource ThemePrimaryBrush}"
+                    BorderThickness="0,0,0,2"
+                    BoxShadow="0 2 10 #20000000"
+                    Padding="15,12">
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <!-- Logo/Title Area -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                        <PathIcon Data="M12,2L1,21H23M12,6L19.53,19H4.47M12,10L16.27,17H7.73" 
+                                 Foreground="{StaticResource ThemePrimaryBrush}" 
+                                 Width="24" Height="24"/>
+                        <TextBlock Text="MU Online Console" 
+                                   FontSize="18" 
+                                   FontWeight="SemiBold" 
+                                   Foreground="{StaticResource ThemeLightBrush}"
+                                   VerticalAlignment="Center"/>
                     </StackPanel>
+                    
+                    <!-- Status Information -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="15" HorizontalAlignment="Center">
+                        <Border Background="#22000000" 
+                                CornerRadius="8" 
+                                Padding="10,5">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <TextBlock Text="Status:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}"/>
+                                <TextBlock Text="{Binding ConnectionStatus}" 
+                                           Foreground="{StaticResource ThemePrimaryBrush}" 
+                                           FontWeight="Medium"/>
+                            </StackPanel>
+                        </Border>
+                        
+                        <Border Background="#22000000" 
+                                CornerRadius="8" 
+                                Padding="10,5">
+                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                <TextBlock Text="Character:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}"/>
+                                <TextBlock Text="{Binding CharacterInfo}" 
+                                           Foreground="{StaticResource ThemePrimaryBrush}"
+                                           FontWeight="Medium"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                    
+                    <!-- Additional Controls -->
+                    <!-- <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                        <Button Content="Settings" 
+                                Theme="{StaticResource SecondaryButton}"
+                                Padding="10,5"/>
+                        <Button Content="Help" 
+                                Theme="{StaticResource SecondaryButton}"
+                                Padding="10,5"/>
+                    </StackPanel> -->
+                </Grid>
+            </Border>
 
-                    <!-- Map Display Area (Scrollable) -->
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                                  Background="#111111">
-                        <!-- Border to visualize map boundaries -->
-                        <Border BorderBrush="DarkGoldenrod" BorderThickness="2" ClipToBounds="True">
-                            <ItemsControl ItemsSource="{Binding MapObjects}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <!-- Canvas for positioning map objects -->
-                                        <!-- Canvas size and margin are bound to ViewModel properties -->
-                                        <Canvas Width="{Binding MapWidth}"
-                                                Height="{Binding MapHeight}"
-                                                Margin="{Binding CanvasMargin}">
-                                            <!-- Map background image -->
-                                            <Canvas.Background>
-                                                <ImageBrush Source="avares://MuOnlineConsole/Assets/Maps/Lorencia.webp" Stretch="Fill"/>
-                                            </Canvas.Background>
-                                        </Canvas>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
+            <!-- Main Content Area with improved TabControl styling -->
+            <Border Grid.Row="1" Grid.Column="0" 
+                    Background="#15FFFFFF"
+                    CornerRadius="8"
+                    BoxShadow="inset 0 0 15 #10000000"
+                    Margin="15,15,8,15">
+                <TabControl TabStripPlacement="Top">
+                    <!-- Improved TabControl Styling -->
+                    <TabControl.Styles>
+                        <Style Selector="TabControl">
+                            <Setter Property="Padding" Value="5"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                        </Style>
+                        <Style Selector="TabItem">
+                            <Setter Property="FontWeight" Value="Medium"/>
+                            <Setter Property="Padding" Value="18,10"/>
+                            <Setter Property="Margin" Value="0,0,2,0"/>
+                            <Setter Property="Foreground" Value="{StaticResource ThemeLightBrush}"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="CornerRadius" Value="8 8 0 0"/>
+                            <Setter Property="Transitions">
+                                <Transitions>
+                                    <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                                </Transitions>
+                            </Setter>
+                        </Style>
+                        <Style Selector="TabItem:pointerover">
+                            <Setter Property="Background" Value="#22FFFFFF"/>
+                        </Style>
+                        <Style Selector="TabItem:selected">
+                            <Setter Property="Foreground" Value="White"/>
+                            <Setter Property="Background" Value="{StaticResource ThemePrimaryBrush}"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Style>
+                        <Style Selector="TabItem:selected > TextBlock">
+                            <Setter Property="Effect">
+                                <DropShadowEffect OffsetX="0" OffsetY="0" BlurRadius="10" Color="#6080FF" />
+                            </Setter>
+                        </Style>
+                    </TabControl.Styles>
 
-                                <!-- Template for individual map objects -->
+                    <!-- Log/Chat Tab with improved styling -->
+                    <TabItem>
+                        <TabItem.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <PathIcon Data="M8,5H22V17H10L8,19V5M2,3H6V19H2V3M3,6V8H5V6H3M3,10V12H5V10H3M3,14V16H5V14H3Z" 
+                                         Width="16" Height="16"/>
+                                <TextBlock Text="Log/Chat"/>
+                            </StackPanel>
+                        </TabItem.Header>
+                        <DockPanel LastChildFill="True" Margin="5">
+                            <Border DockPanel.Dock="Top" 
+                                    BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                                    BorderThickness="0,0,0,1"
+                                    Padding="5,5,5,10"
+                                    Margin="0,0,0,10">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <CheckBox Grid.Column="0" 
+                                              Content="Auto-scroll"
+                                              IsChecked="{Binding IsAutoScrollEnabled}"
+                                              Foreground="{StaticResource ThemeLightBrush}"/>
+                                    
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                        <ComboBox Width="120" SelectedIndex="0">
+                                            <ComboBoxItem Content="All Messages"/>
+                                            <ComboBoxItem Content="System"/>
+                                            <ComboBoxItem Content="Chat"/>
+                                            <ComboBoxItem Content="Combat"/>
+                                        </ComboBox>
+                                        <Button Content="Clear" Theme="{StaticResource SecondaryButton}" Padding="8,4"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            
+                            <Border Background="#22000000" 
+                                    CornerRadius="8" 
+                                    BoxShadow="inset 0 0 10 #10000000">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" x:Name="LogScrollViewer" Padding="12">
+                                    <ItemsControl ItemsSource="{Binding LogMessages}" Margin="0,0,0,30">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,2" ColumnDefinitions="Auto,*">
+                                                    <Border Grid.Column="0" 
+                                                            Width="4" 
+                                                            Height="16" 
+                                                            CornerRadius="2" 
+                                                            Background="{StaticResource ThemePrimaryBrush}" 
+                                                            Margin="0,0,8,0"/>
+                                                    <TextBlock Grid.Column="1" 
+                                                               Text="{Binding}" 
+                                                               TextWrapping="Wrap" 
+                                                               Foreground="{StaticResource ThemeLightBrush}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+                        </DockPanel>
+                    </TabItem>
+
+                    <!-- Scope Tab with improved styling -->
+                    <TabItem>
+                        <TabItem.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <PathIcon Data="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z" 
+                                         Width="16" Height="16"/>
+                                <TextBlock Text="Scope"/>
+                            </StackPanel>
+                        </TabItem.Header>
+                        <Border Background="#22000000" 
+                                CornerRadius="8" 
+                                BoxShadow="inset 0 0 10 #10000000" 
+                                Margin="5">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
+                                <ItemsControl ItemsSource="{Binding ScopeItems}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Classes="ListItemStyle"
+                                                    Background="#25FFFFFF">
+                                                <Grid ColumnDefinitions="100,*">
+                                                    <Border Grid.Column="0" 
+                                                            Width="3" 
+                                                            Height="15" 
+                                                            CornerRadius="1.5" 
+                                                            Background="{StaticResource ThemeAccentBrush}" 
+                                                            Margin="0,0,10,0"/>
+                                                    <TextBlock Grid.Column="1" 
+                                                               Text="{Binding}" 
+                                                               TextWrapping="Wrap" 
+                                                               Foreground="{StaticResource ThemeLightBrush}"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Border>
+                    </TabItem>
+
+                    <!-- Inventory Tab with improved styling -->
+                    <TabItem>
+                        <TabItem.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <PathIcon Data="M20,8H4V6H20M20,18H4V12H20M20,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V6C22,4.89 21.1,4 20,4Z" 
+                                         Width="16" Height="16"/>
+                                <TextBlock Text="Inventory"/>
+                            </StackPanel>
+                        </TabItem.Header>
+                        <Grid Margin="5" RowDefinitions="Auto,*">
+                            <Border Grid.Row="0" 
+                                    BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                                    BorderThickness="0,0,0,1"
+                                    Padding="5,5,5,10" 
+                                    Margin="0,0,0,10">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <TextBlock Grid.Column="0" 
+                                               Text="Items" 
+                                               FontWeight="SemiBold" 
+                                               Foreground="{StaticResource ThemeLightBrush}"/>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                        <Button Content="Sort" Theme="{StaticResource SecondaryButton}" Padding="8,4"/>
+                                        <Button Content="Refresh" Theme="{StaticResource SecondaryButton}" Padding="8,4"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            
+                            <Border Grid.Row="1" 
+                                    Background="#22000000" 
+                                    CornerRadius="8" 
+                                    BoxShadow="inset 0 0 10 #10000000">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
+                                    <ItemsControl ItemsSource="{Binding InventoryItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Classes="ListItemStyle" Background="#25FFFFFF">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                                        <!-- <Border Grid.Column="0" 
+                                                                Width="40" 
+                                                                Height="40" 
+                                                                Background="#30FFFFFF" 
+                                                                CornerRadius="4" 
+                                                                Margin="0,0,10,0">
+                                                            <Rectangle Width="24" 
+                                                                       Height="24" 
+                                                                       Fill="{StaticResource ThemeAccentBrush}" 
+                                                                       HorizontalAlignment="Center" 
+                                                                       VerticalAlignment="Center"/>
+                                                        </Border> -->
+                                                        
+                                                        <TextBlock Grid.Column="1" 
+                                                                   Text="{Binding}" 
+                                                                   TextWrapping="NoWrap" 
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource ThemeLightBrush}"/>
+                                                        
+                                                        <!-- <Button Grid.Column="2" 
+                                                                Content="Use" 
+                                                                Theme="{StaticResource SecondaryButton}" 
+                                                                Padding="8,4"
+                                                                Margin="0,0,5,0"/> -->
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                    </TabItem>
+
+                    <!-- Skills Tab with improved styling -->
+                    <TabItem>
+                        <TabItem.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <PathIcon Data="M12,1L21,5V11C21,16.55 17.16,21.74 12,23C6.84,21.74 3,16.55 3,11V5L12,1M16,14H8V15H16V14M16,12H8V13H16V12M16,10H8V11H16V10M10,8L8,6H16L14,8H10Z" 
+                                         Width="16" Height="16"/>
+                                <TextBlock Text="Skills"/>
+                            </StackPanel>
+                        </TabItem.Header>
+                        <Grid Margin="5" RowDefinitions="Auto,*">
+                            <Border Grid.Row="0" 
+                                    BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                                    BorderThickness="0,0,0,1"
+                                    Padding="5,5,5,10" 
+                                    Margin="0,0,0,10">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <TextBlock Grid.Column="0" 
+                                               Text="Available Skills" 
+                                               FontWeight="SemiBold" 
+                                               Foreground="{StaticResource ThemeLightBrush}"/>
+                                    <Button Grid.Column="2" 
+                                            Content="Refresh" 
+                                            Theme="{StaticResource SecondaryButton}" 
+                                            Padding="8,4"/>
+                                </Grid>
+                            </Border>
+                            
+                            <Border Grid.Row="1" 
+                                    Background="#22000000" 
+                                    CornerRadius="8" 
+                                    BoxShadow="inset 0 0 10 #10000000">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12">
+                                    <ItemsControl ItemsSource="{Binding SkillItems}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Classes="ListItemStyle" Background="#25FFFFFF">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                                        <Border Grid.Column="0" 
+                                                                Width="40" 
+                                                                Height="40" 
+                                                                Background="#304F6BED" 
+                                                                CornerRadius="20" 
+                                                                Margin="0,0,10,0">
+                                                            <TextBlock Text="S" 
+                                                                       FontWeight="Bold" 
+                                                                       HorizontalAlignment="Center" 
+                                                                       VerticalAlignment="Center" 
+                                                                       Foreground="{StaticResource ThemePrimaryBrush}"/>
+                                                        </Border>
+                                                        
+                                                        <TextBlock Grid.Column="1" 
+                                                                   Text="{Binding}" 
+                                                                   TextWrapping="NoWrap"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource ThemeLightBrush}"/>
+                                                        
+                                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="5">
+                                                            <Button Content="Use" 
+                                                                    Theme="{StaticResource GameActionButton}" 
+                                                                    Padding="8,4"/>
+                                                            <Button Content="Info" 
+                                                                    Theme="{StaticResource SecondaryButton}" 
+                                                                    Padding="8,4"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                    </TabItem>
+
+                    <!-- Stats Tab with improved styling -->
+                    <TabItem>
+                        <TabItem.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <PathIcon Data="M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H9V7H7M11,7V9H13V7H11M15,7V9H17V7H15M7,11V13H9V11H7M11,11V13H13V11H11M15,11V13H17V11H15M7,15V17H9V15H7M11,15V17H13V15H11M15,15V17H17V15H15Z" 
+                                         Width="16" Height="16"/>
+                                <TextBlock Text="Stats"/>
+                            </StackPanel>
+                        </TabItem.Header>
+                        <Grid Margin="5" RowDefinitions="Auto,*">
+                            <Border Grid.Row="0" 
+                                    BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                                    BorderThickness="0,0,0,1"
+                                    Padding="5,5,5,10" 
+                                    Margin="0,0,0,10">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <TextBlock Grid.Column="0" 
+                                               Text="Character Statistics" 
+                                               FontWeight="SemiBold" 
+                                               Foreground="{StaticResource ThemeLightBrush}"/>
+                                    <Button Grid.Column="2" 
+                                            Content="Refresh" 
+                                            Theme="{StaticResource SecondaryButton}" 
+                                            Padding="8,4"/>
+                                </Grid>
+                            </Border>
+                            
+<Border Grid.Row="1" 
+                            Background="#22000000" 
+                            CornerRadius="8" 
+                            BoxShadow="inset 0 0 10 #10000000">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="12">
+                            <ItemsControl ItemsSource="{Binding CharacterStatsList}">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:MapObjectViewModel">
-                                        <Ellipse Width="{Binding Size}" Height="{Binding Size}"
-                                                 Fill="{Binding Color}"
-                                                 ToolTip.Tip="{Binding ToolTipText}">
-                                            <!-- Positioning Ellipse using TranslateTransform -->
-                                            <Ellipse.RenderTransform>
-                                                <TranslateTransform X="{Binding MapX}" Y="{Binding MapY}"/>
-                                            </Ellipse.RenderTransform>
-                                        </Ellipse>
+                                    <DataTemplate>
+                                        <Border Classes="ListItemStyle" Background="#25FFFFFF">
+                                            <Grid ColumnDefinitions="Auto,*">
+                                                <Border Grid.Column="0" 
+                                                        Width="4" 
+                                                        Margin="0,0,12,0" 
+                                                        Background="{StaticResource ThemePrimaryBrush}"/>
+                                                <Grid Grid.Column="1" ColumnDefinitions="Auto,*">
+                                                    <TextBlock Grid.Column="0" 
+                                                               Text="{Binding Key}" 
+                                                               FontWeight="Bold" 
+                                                               Margin="0,0,15,0" 
+                                                               Foreground="{StaticResource ThemePrimaryBrush}"
+                                                               Width="120"/>
+                                                    <TextBlock Grid.Column="1" 
+                                                               Text="{Binding Value}" 
+                                                               TextWrapping="Wrap" 
+                                                               Foreground="{StaticResource ThemeLightBrush}"/>
+                                                </Grid>
+                                            </Grid>
+                                        </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </Border>
-                    </ScrollViewer>
+                        </ScrollViewer>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- Map Tab with significantly improved styling -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M15,19L9,16.89V5L15,7.11M20.5,3C20.44,3 20.39,3 20.34,3L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21C3.55,21 3.61,21 3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3Z" 
+                                 Width="16" Height="16"/>
+                        <TextBlock Text="Map"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <DockPanel LastChildFill="True" x:Name="MapDockPanel" Margin="5">
+                    <Border DockPanel.Dock="Top" 
+                            BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                            BorderThickness="0,0,0,1"
+                            Padding="5,5,5,10"
+                            Margin="0,0,0,10">
+                        <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                            <Button Grid.Column="0" 
+                                    Theme="{StaticResource GameActionButton}"
+                                    Command="{Binding ZoomInMapCommand}"
+                                    Padding="10,5">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                    <PathIcon Data="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" Width="12" Height="12"/>
+                                    <TextBlock Text="Zoom In"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="1" 
+                                    Theme="{StaticResource GameActionButton}"
+                                    Command="{Binding ZoomOutMapCommand}"
+                                    Margin="8,0,0,0"
+                                    Padding="10,5">
+                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                    <PathIcon Data="M19,13H5V11H19V13Z" Width="12" Height="12"/>
+                                    <TextBlock Text="Zoom Out"/>
+                                </StackPanel>
+                            </Button>
+                            <TextBlock Grid.Column="3" 
+                                       Text="{Binding MapScale, StringFormat='Scale: {0:F1}'}" 
+                                       VerticalAlignment="Center" 
+                                       Foreground="{StaticResource ThemeLightBrush}"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Background="#22000000" 
+                            CornerRadius="8" 
+                            BoxShadow="inset 0 0 10 #10000000"
+                            ClipToBounds="True">
+                        <Grid>
+                            <!-- Map Gradient Overlay -->
+                            <Border>
+                                <Border.Background>
+                                    <RadialGradientBrush Center="0.5,0.5" RadiusX="0.8" RadiusY="0.8">
+                                        <GradientStop Offset="0" Color="#00000000"/>
+                                        <GradientStop Offset="1" Color="#40000000"/>
+                                    </RadialGradientBrush>
+                                </Border.Background>
+                            </Border>
+                            
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                <Border BorderBrush="{StaticResource ThemeAccentBrush}" 
+                                        BorderThickness="2" 
+                                        CornerRadius="4"
+                                        ClipToBounds="True">
+                                    <Grid>
+                                        <!-- Map Grid Lines -->
+                                        <Canvas Width="{Binding MapWidth}"
+                                                Height="{Binding MapHeight}">
+                                            <Canvas.Background>
+                                                <DrawingBrush TileMode="Tile" Stretch="None" DestinationRect="0,0,50,50">
+                                                <DrawingBrush.Drawing>
+                                                    <DrawingGroup>
+
+                                                    <!-- full‑cell transparent background -->
+                                                    <GeometryDrawing Brush="Transparent">
+                                                        <GeometryDrawing.Geometry>
+                                                        <RectangleGeometry Rect="0,0,50,50"/>
+                                                        </GeometryDrawing.Geometry>
+                                                    </GeometryDrawing>
+
+                                                    <!-- accent grid lines -->
+                                                    <GeometryDrawing Brush="Transparent">
+                                                        <GeometryDrawing.Pen>
+                                                        <Pen Brush="{DynamicResource ThemeAccentBrush}" Thickness="0.5"/>
+                                                        </GeometryDrawing.Pen>
+                                                        <GeometryDrawing.Geometry>
+                                                        <GeometryGroup>
+                                                            <LineGeometry StartPoint="0,0" EndPoint="50,0"/>
+                                                            <LineGeometry StartPoint="0,0" EndPoint="0,50"/>
+                                                        </GeometryGroup>
+                                                        </GeometryDrawing.Geometry>
+                                                    </GeometryDrawing>
+
+                                                    </DrawingGroup>
+                                                </DrawingBrush.Drawing>
+                                                </DrawingBrush>
+                                            </Canvas.Background>
+                                        </Canvas>
+                                        
+                                        <!-- Map Base Image -->
+                                        <ItemsControl ItemsSource="{Binding MapObjects}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <Canvas Width="{Binding MapWidth}"
+                                                            Height="{Binding MapHeight}"
+                                                            Margin="{Binding CanvasMargin}">
+                                                        <Canvas.Background>
+                                                            <ImageBrush Source="avares://MuOnlineConsole/Assets/Maps/Lorencia.webp" Stretch="Fill" Opacity="0.9"/>
+                                                        </Canvas.Background>
+                                                    </Canvas>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="vm:MapObjectViewModel">
+                                                    <Grid>
+                                                        <!-- Glow effect for objects -->
+                                                        <Ellipse Width="{Binding Size, Converter={x:Static converters:NumberConverters.MultiplyByTwo}}" 
+                                                                 Height="{Binding Size, Converter={x:Static converters:NumberConverters.MultiplyByTwo}}"
+                                                                 Opacity="0.3"
+                                                                 StrokeThickness="0">
+                                                            <Ellipse.Fill>
+                                                                <RadialGradientBrush>
+                                                                    <GradientStop Offset="0" Color="{Binding Color}"/>
+                                                                    <GradientStop Offset="1" Color="#00FFFFFF"/>
+                                                                </RadialGradientBrush>
+                                                            </Ellipse.Fill>
+                                                            <Ellipse.RenderTransform>
+                                                                <TransformGroup>
+                                                                    <TranslateTransform X="{Binding MapX, Converter={x:Static converters:NumberConverters.SubtractOne}}" 
+                                                                                        Y="{Binding MapY, Converter={x:Static converters:NumberConverters.SubtractOne}}"/>
+                                                                    <TransformGroup>
+                                                                        <ScaleTransform ScaleX="1.5" ScaleY="1.5"/>
+                                                                        <TranslateTransform X="{Binding Size, Converter={x:Static converters:NumberConverters.DivideByTwo}}" 
+                                                                                            Y="{Binding Size, Converter={x:Static converters:NumberConverters.DivideByTwo}}"/>
+                                                                    </TransformGroup>
+                                                                </TransformGroup>
+                                                            </Ellipse.RenderTransform>
+                                                        </Ellipse>
+                                                        
+                                                        <!-- Shadow for better visibility -->
+                                                        <Ellipse Width="{Binding Size}" 
+                                                                 Height="{Binding Size}"
+                                                                 Fill="Black" 
+                                                                 Opacity="0.5"
+                                                                 Margin="1.5,1.5,0,0">
+                                                            <Ellipse.RenderTransform>
+                                                                <TranslateTransform X="{Binding MapX}" 
+                                                                                    Y="{Binding MapY}"/>
+                                                            </Ellipse.RenderTransform>
+                                                        </Ellipse>
+                                                        
+                                                        <!-- Main indicator -->
+                                                        <Ellipse Width="{Binding Size}" 
+                                                                 Height="{Binding Size}"
+                                                                 Stroke="White"
+                                                                 StrokeThickness="1.5"
+                                                                 ToolTip.Tip="{Binding ToolTipText}">
+                                                            <Ellipse.Fill>
+                                                                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                                                                    <GradientStop Offset="0" Color="{Binding Color}"/>
+                                                                    <GradientStop Offset="1" Color="#FFFFFF"/>
+                                                                </LinearGradientBrush>
+                                                            </Ellipse.Fill>
+                                                            <Ellipse.Effect>
+                                                                <DropShadowEffect OffsetX="0" OffsetY="0" BlurRadius="10" Color="{Binding Color}" />
+                                                            </Ellipse.Effect>
+                                                            <Ellipse.RenderTransform>
+                                                                <TranslateTransform X="{Binding MapX}" Y="{Binding MapY}"/>
+                                                            </Ellipse.RenderTransform>
+                                                        </Ellipse>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                </Border>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
                 </DockPanel>
             </TabItem>
 
-            <!-- Servers Tab -->
-            <TabItem Header="Servers">
-                <ListBox ItemsSource="{Binding ServerList}" SelectedItem="{Binding SelectedServer}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding DisplayText}"/>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+            <!-- Servers Tab with improved styling -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M4,1H20A1,1 0 0,1 21,2V6A1,1 0 0,1 20,7H4A1,1 0 0,1 3,6V2A1,1 0 0,1 4,1M4,9H20A1,1 0 0,1 21,10V14A1,1 0 0,1 20,15H4A1,1 0 0,1 3,14V10A1,1 0 0,1 4,9M4,17H20A1,1 0 0,1 21,18V22A1,1 0 0,1 20,23H4A1,1 0 0,1 3,22V18A1,1 0 0,1 4,17M9,5H10V3H9V5M9,13H10V11H9V13M9,21H10V19H9V21M5,3V5H7V3H5M5,11V13H7V11H5M5,19V21H7V19H5Z" 
+                                 Width="16" Height="16"/>
+                        <TextBlock Text="Servers"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <Grid Margin="5">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Row="0" 
+                            BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                            BorderThickness="0,0,0,1"
+                            Padding="5,5,5,10" 
+                            Margin="0,0,0,10">
+                        <!-- <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" 
+                                       Text="Available Servers" 
+                                       FontWeight="SemiBold" 
+                                       Foreground="{StaticResource ThemeLightBrush}"/>
+                                       
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                <ComboBox Width="120" SelectedIndex="0">
+                                    <ComboBoxItem Content="All Regions"/>
+                                    <ComboBoxItem Content="Europe"/>
+                                    <ComboBoxItem Content="North America"/>
+                                    <ComboBoxItem Content="Asia"/>
+                                </ComboBox>
+                                <Button Content="Refresh" Theme="{StaticResource SecondaryButton}" Padding="8,4"/>
+                            </StackPanel>
+                        </Grid> -->
+                    </Border>
+                    
+                    <Border Grid.Row="1" 
+                            Background="#22000000" 
+                            CornerRadius="8" 
+                            BoxShadow="inset 0 0 10 #10000000">
+                        <ListBox ItemsSource="{Binding ServerList}" 
+                                 SelectedItem="{Binding SelectedServer}"
+                                 Background="Transparent"
+                                 Padding="8">
+                            <ListBox.Styles>
+                                <Style Selector="ListBoxItem">
+                                    <Setter Property="Padding" Value="12,10"/>
+                                    <Setter Property="Margin" Value="0,3"/>
+                                    <Setter Property="Background" Value="#20FFFFFF"/>
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                    <Setter Property="Transitions">
+                                        <Transitions>
+                                            <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                                        </Transitions>
+                                    </Setter>
+                                </Style>
+                                <Style Selector="ListBoxItem:pointerover">
+                                    <Setter Property="Background" Value="#30FFFFFF"/>
+                                </Style>
+                                <Style Selector="ListBoxItem:selected">
+                                    <Setter Property="Background" Value="{StaticResource ThemePrimaryBrush}"/>
+                                </Style>
+                            </ListBox.Styles>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                        <Border Grid.Column="0" 
+                                                Width="12" 
+                                                Height="12" 
+                                                CornerRadius="6" 
+                                                Background="{StaticResource PositiveStatusBrush}" 
+                                                Margin="0,0,10,0"
+                                                VerticalAlignment="Center"/>
+                                                
+                                        <TextBlock Grid.Column="1" 
+                                                   Text="{Binding DisplayText}" 
+                                                   Foreground="{StaticResource ThemeLightBrush}"
+                                                   VerticalAlignment="Center"/>
+                                                   
+                                        <TextBlock Grid.Column="2" 
+                                                   Text="125 ms" 
+                                                   Foreground="#BBFFFFFF"
+                                                   Opacity="0.7"
+                                                   FontSize="12"
+                                                   VerticalAlignment="Center"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Border>
+                </Grid>
             </TabItem>
 
-            <!-- Characters Tab -->
-            <TabItem Header="Characters">
-                <ListBox ItemsSource="{Binding CharacterList}" SelectedItem="{Binding SelectedCharacter}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding DisplayText}"/>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+            <!-- Characters Tab with improved styling -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M12,4A4,4 0 0,1 16,8A4,4 0 0,1 12,12A4,4 0 0,1 8,8A4,4 0 0,1 12,4M12,14C16.42,14 20,15.79 20,18V20H4V18C4,15.79 7.58,14 12,14Z" 
+                                 Width="16" Height="16"/>
+                        <TextBlock Text="Characters"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <Grid Margin="5" RowDefinitions="Auto,*">
+                    <Border Grid.Row="0" 
+                            BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                            BorderThickness="0,0,0,1"
+                            Padding="5,5,5,10" 
+                            Margin="0,0,0,10">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" 
+                                       Text="Character Selection" 
+                                       FontWeight="SemiBold" 
+                                       Foreground="{StaticResource ThemeLightBrush}"/>
+                                       
+                            <Button Grid.Column="2" 
+                                    Content="Create New" 
+                                    Theme="{StaticResource GameActionButton}"
+                                    Padding="10,5"/>
+                        </Grid>
+                    </Border>
+                    
+                    <Border Grid.Row="1" 
+                            Background="#22000000" 
+                            CornerRadius="8" 
+                            BoxShadow="inset 0 0 10 #10000000">
+                        <ListBox ItemsSource="{Binding CharacterList}" 
+                                 SelectedItem="{Binding SelectedCharacter}"
+                                 Background="Transparent"
+                                 Padding="8">
+                            <ListBox.Styles>
+                                <Style Selector="ListBoxItem">
+                                    <Setter Property="Padding" Value="12,12"/>
+                                    <Setter Property="Margin" Value="0,4"/>
+                                    <Setter Property="Background" Value="#22FFFFFF"/>
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                    <Setter Property="Transitions">
+                                        <Transitions>
+                                            <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                                        </Transitions>
+                                    </Setter>
+                                </Style>
+                                <Style Selector="ListBoxItem:pointerover">
+                                    <Setter Property="Background" Value="#32FFFFFF"/>
+                                </Style>
+                                <Style Selector="ListBoxItem:selected">
+                                    <Setter Property="Background">
+                                        <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                                            <GradientStop Offset="0" Color="#5576FF"/>
+                                            <GradientStop Offset="1" Color="#4560D6"/>
+                                        </LinearGradientBrush>
+                                    </Setter>
+                                    <Setter Property="Effect">
+                                        <DropShadowEffect OffsetX="0" OffsetY="2" BlurRadius="5" Color="#3050A0" />
+                                    </Setter>
+                                </Style>
+                            </ListBox.Styles>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ColumnDefinitions="Auto,*,Auto">
+                                        <Border Grid.Column="0" 
+                                                Width="40" 
+                                                Height="40" 
+                                                Background="#304F6BED" 
+                                                CornerRadius="20" 
+                                                Margin="0,0,12,0">
+                                            <TextBlock Text="C" 
+                                                       FontWeight="Bold" 
+                                                       FontSize="18"
+                                                       HorizontalAlignment="Center" 
+                                                       VerticalAlignment="Center" 
+                                                       Foreground="{StaticResource ThemePrimaryBrush}"/>
+                                        </Border>
+                                        
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                            <TextBlock Text="{Binding DisplayText}" 
+                                                       Foreground="{StaticResource ThemeLightBrush}"
+                                                       FontWeight="Medium"/>
+                                            <TextBlock Text="PLACEHOLDER" 
+                                                       Foreground="#BBFFFFFF"
+                                                       FontSize="12"/>
+                                        </StackPanel>
+                                        
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="5">
+                                            <Button Content="Details" 
+                                                    Theme="{StaticResource SecondaryButton}" 
+                                                    Padding="8,4"/>
+                                            <Button Content="Select" 
+                                                    Theme="{StaticResource GameActionButton}" 
+                                                    Padding="8,4"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Border>
+                </Grid>
             </TabItem>
         </TabControl>
+    </Border>
 
-        <!-- Stats/Actions Area (Right Panel) -->
-        <StackPanel Grid.Row="1" Grid.Column="1" Margin="5" Width="200" Spacing="5">
-            <TextBlock Text="Stats" FontWeight="Bold"/>
-            <!-- Character stats summary display -->
-            <TextBlock Text="{Binding CharacterStatsDisplay}" TextWrapping="Wrap"/>
+    <!-- Stats/Actions Area (Right Panel) with improved styling -->
+    <Border Grid.Row="1" Grid.Column="1" 
+            Background="{StaticResource SidebarGradientBrush}"
+            CornerRadius="8"
+            Width="260" 
+            Margin="0,15,15,15"
+            BoxShadow="2 0 10 #20000000">
+        <DockPanel>
+            <!-- Sidebar Header -->
+            <Border DockPanel.Dock="Top" 
+                    Background="#22000000"
+                    BorderThickness="0,0,0,1"
+                    BorderBrush="{StaticResource ThemePrimaryBrush}"
+                    Padding="15,10">
+                <TextBlock Text="Character Panel" 
+                           FontWeight="Bold" 
+                           FontSize="16"
+                           HorizontalAlignment="Center"
+                           Foreground="{StaticResource ThemeLightBrush}"/>
+            </Border>
+            
+            <!-- Sidebar Content -->
+            <ScrollViewer Padding="15">
+                <StackPanel Spacing="15" Margin="0,0,0,45">
+                    <!-- Character Avatar -->
+                    <Border HorizontalAlignment="Center" 
+                            Width="120" 
+                            Height="120" 
+                            CornerRadius="60" 
+                            BorderBrush="{StaticResource ThemePrimaryBrush}" 
+                            BorderThickness="2"
+                            Margin="0,5,0,10"
+                            BoxShadow="0 0 20 #4F6BED">
+                        <Border.Background>
+                            <RadialGradientBrush>
+                                <GradientStop Offset="0" Color="#40FFFFFF"/>
+                                <GradientStop Offset="1" Color="#20FFFFFF"/>
+                            </RadialGradientBrush>
+                        </Border.Background>
+                        <TextBlock Text="DK" 
+                                   FontSize="40" 
+                                   FontWeight="Bold" 
+                                   HorizontalAlignment="Center" 
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource ThemePrimaryBrush}"/>
+                    </Border>
+                    
+                    <!-- Stats Section -->
+                    <Border Background="#15FFFFFF" 
+                            CornerRadius="6" 
+                            Padding="12" 
+                            BoxShadow="0 2 4 #10000000">
+                        <StackPanel>
+                            <TextBlock Text="Character Stats" 
+                                       FontWeight="Bold" 
+                                       FontSize="14"
+                                       Foreground="{StaticResource ThemePrimaryBrush}"
+                                       Margin="0,0,0,8"/>
+                            
+                            <!-- Progress bars for key stats -->
+                            <StackPanel Spacing="8">
+                                <!-- HEALTH GRID (ZMODYFIKOWANY) -->
+                                <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Health" Foreground="{StaticResource ThemeLightBrush}" FontSize="12"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CharHealthDisplay}" Foreground="{StaticResource ThemeLightBrush}" FontSize="12"/>
+                                    <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Value="{Binding CharHealthPercentage}" Maximum="100" Height="8" CornerRadius="4" Foreground="#FF5252"/>
+                                </Grid>
 
-            <TextBlock Text="Actions" FontWeight="Bold" Margin="0,10,0,0"/>
+                                <!-- MANA GRID (ZMODYFIKOWANY) -->
+                                <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Mana" Foreground="{StaticResource ThemeLightBrush}" FontSize="12"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CharManaDisplay}" Foreground="{StaticResource ThemeLightBrush}" FontSize="12"/>
+                                    <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Value="{Binding CharManaPercentage}" Maximum="100" Height="8" CornerRadius="4" Foreground="#4F6BED"/>
+                                </Grid>
 
-            <!-- Connect Server Button -->
-            <Button Content="Connect Server" Command="{Binding ConnectServerCommand}"
-                    IsVisible="{Binding CanConnectServer}"/>
+                                <!-- EXPERIENCE GRID (ZMODYFIKOWANY) -->
+                                <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Experience" Foreground="{StaticResource ThemeLightBrush}" FontSize="12"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CharExperienceDisplay}" Foreground="{StaticResource ThemeLightBrush}" FontSize="12"/>
+                                    <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Value="{Binding CharExperiencePercentage}" Maximum="100" Height="8" CornerRadius="4" Foreground="#FFC107"/>
+                                </Grid>
+                            </StackPanel>
 
-            <!-- Server List related buttons, visible when interaction is possible -->
-            <StackPanel IsVisible="{Binding CanInteractWithServerList}">
-                <Button Content="Refresh Servers" Command="{Binding RefreshServersCommand}" Margin="0,5,0,0"/>
-                <!-- Connect Game Server button, enabled only when a server is selected -->
-                <Button Content="Connect Game Server" Command="{Binding ConnectGameServerCommand}"
-                        IsEnabled="{Binding SelectedServer, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
-                        Margin="0,5,0,0"/>
-            </StackPanel>
+                            <!-- DODANY NOWY STACKPANEL DLA STATYSTYK NUMERYCZNYCH -->
+                            <StackPanel Margin="0,12,0,0" Spacing="4">
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,0">
+                                    <TextBlock Grid.Column="0" Text="Strength:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharStrength}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,0">
+                                    <TextBlock Grid.Column="0" Text="Agility:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharAgility}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,0">
+                                    <TextBlock Grid.Column="0" Text="Vitality:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharVitality}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,0">
+                                    <TextBlock Grid.Column="0" Text="Energy:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharEnergy}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,0">
+                                    <TextBlock Grid.Column="0" Text="Command:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharCommand}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,4,0,0"> <!-- Dodano mały margines górny -->
+                                    <TextBlock Grid.Column="0" Text="SD:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharShieldDisplay}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,0">
+                                    <TextBlock Grid.Column="0" Text="AG:" FontWeight="SemiBold" Foreground="{StaticResource ThemeLightBrush}" Width="80"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding CharAbilityDisplay}" Foreground="{StaticResource ThemeLightBrush}"/>
+                                </Grid>
+                            </StackPanel>
 
-            <!-- Select Character button, visible only when connected to a game server -->
-            <!-- Enabled only when a character is selected -->
-            <Button Content="Select Character" Command="{Binding SelectCharacterCommand}"
-                    IsVisible="{Binding CurrentState, Converter={x:Static converters:ObjectConverters.IsEqual}, ConverterParameter={x:Static clientEnums:ClientConnectionState.ConnectedToGameServer}}"
-                    IsEnabled="{Binding SelectedCharacter, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
-                    Margin="0,5,0,0"/>
+                        </StackPanel>
+                    </Border>
 
-            <!-- In-Game Action Buttons, visible only when character is in game -->
-            <StackPanel IsVisible="{Binding IsInGame}">
-                <Button Content="Pickup Nearest" Command="{Binding PickupNearestCommand}" Margin="0,10,0,0"/>
-                <Button Content="Show Stats" Command="{Binding ShowStatsCommand}" Margin="0,5,0,0"/>
-                <Button Content="Show Inventory" Command="{Binding ShowInventoryCommand}" Margin="0,5,0,0"/>
-                <Button Content="Show Skills" Command="{Binding ShowSkillsCommand}" Margin="0,5,0,0"/>
-                <!-- Add more in-game action buttons here if needed -->
-            </StackPanel>
-        </StackPanel>
+                    <!-- Actions Section -->
+                    <Border Background="#15FFFFFF" 
+                            CornerRadius="6" 
+                            Padding="12" 
+                            BoxShadow="0 2 4 #10000000">
+                        <StackPanel>
+                            <TextBlock Text="Actions" 
+                                       FontWeight="Bold" 
+                                       FontSize="14"
+                                       Foreground="{StaticResource ThemePrimaryBrush}"
+                                       Margin="0,0,0,8"/>
 
-        <!-- Input Area (Bottom) -->
-        <DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" LastChildFill="True" Margin="5">
-            <!-- Send Button for commands -->
-            <Button DockPanel.Dock="Right" Content="Send"
-                    Command="{Binding SendInputCommand}" CommandParameter="{Binding InputText}"/>
-            <!-- Textbox for user input -->
-            <TextBox Text="{Binding InputText}" Watermark="Enter command..."
-                     KeyDown="InputTextBox_KeyDown"/>
+                            <!-- Connect Server Button -->
+                            <Button Content="Connect Server" 
+                                    Command="{Binding ConnectServerCommand}"
+                                    IsVisible="{Binding CanConnectServer}"
+                                    Theme="{StaticResource GameActionButton}"
+                                    HorizontalAlignment="Stretch"
+                                    Margin="0,2"/>
+
+                            <!-- Server List related buttons -->
+                            <StackPanel IsVisible="{Binding CanInteractWithServerList}" Spacing="4">
+                                <Button Content="Refresh Servers" 
+                                        Command="{Binding RefreshServersCommand}"
+                                        Theme="{StaticResource GameActionButton}"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="0,2"/>
+                                
+                                <Button Content="Connect Game Server" 
+                                        Command="{Binding ConnectGameServerCommand}"
+                                        IsEnabled="{Binding SelectedServer, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+                                        Theme="{StaticResource GameActionButton}"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="0,2"/>
+                            </StackPanel>
+
+                            <!-- Select Character button -->
+                            <Button Content="Select Character" 
+                                    Command="{Binding SelectCharacterCommand}"
+                                    IsVisible="{Binding CurrentState, Converter={x:Static converters:ObjectConverters.IsEqual}, 
+                                               ConverterParameter={x:Static clientEnums:ClientConnectionState.ConnectedToGameServer}}"
+                                    IsEnabled="{Binding SelectedCharacter, Converter={x:Static converters:ObjectConverters.IsNotNull}}"
+                                    Theme="{StaticResource GameActionButton}"
+                                    HorizontalAlignment="Stretch"
+                                    Margin="0,2"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- In-Game Action Buttons -->
+                    <Border IsVisible="{Binding IsInGame}" 
+                            Background="#15FFFFFF" 
+                            CornerRadius="6" 
+                            Padding="12" 
+                            BoxShadow="0 2 4 #10000000">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Game Actions" 
+                                       FontWeight="Bold" 
+                                       FontSize="14"
+                                       Foreground="{StaticResource ThemePrimaryBrush}"
+                                       Margin="0,0,0,8"/>
+                            
+                            <Button Content="Pickup Nearest" 
+                                    Command="{Binding PickupNearestCommand}"
+                                    Theme="{StaticResource GameActionButton}"
+                                    HorizontalAlignment="Stretch"/>
+                            
+                            <Button Content="Show Stats" 
+                                    Command="{Binding ShowStatsCommand}"
+                                    Theme="{StaticResource GameActionButton}"
+                                    HorizontalAlignment="Stretch"/>
+                            
+                            <Button Content="Show Inventory" 
+                                    Command="{Binding ShowInventoryCommand}"
+                                    Theme="{StaticResource GameActionButton}"
+                                    HorizontalAlignment="Stretch"/>
+                            
+                            <Button Content="Show Skills" 
+                                    Command="{Binding ShowSkillsCommand}"
+                                    Theme="{StaticResource GameActionButton}"
+                                    HorizontalAlignment="Stretch"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
         </DockPanel>
+    </Border>
 
-    </Grid>
+    <!-- Input Area (Bottom) with improved styling -->
+    <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+            Background="{StaticResource ThemeSecondaryBrush}"
+            BorderBrush="{StaticResource ThemePrimaryBrush}"
+            BorderThickness="0,1,0,0"
+            Padding="12">
+        <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" 
+                     Text="{Binding InputText}" 
+                     Watermark="Enter command..." 
+                     KeyDown="InputTextBox_KeyDown"
+                     CornerRadius="6"
+                     Height="36"
+                     VerticalContentAlignment="Center"
+                     Padding="12,0"/>
+            
+            <Button Grid.Column="1" 
+                    Content="Send"
+                    Command="{Binding SendInputCommand}" 
+                    CommandParameter="{Binding InputText}"
+                    Theme="{StaticResource GameActionButton}"
+                    Width="100"
+                    Height="36"
+                    Margin="10,0,0,0"/>
+        </Grid>
+    </Border>
+</Grid>
+</Panel>
 </Window>

@@ -98,10 +98,44 @@ namespace MuOnlineConsole.GUI.ViewModels
         private string _inputText = string.Empty;
 
         // Bindable properties for UI display
-        public string WindowTitle => $"MU Console Client - {(_characterState?.Name ?? "No Character")} ({CharacterClassDatabase.GetClassName(_characterState?.Class ?? CharacterClassNumber.DarkWizard)}) - {CurrentState}";
+        public string WindowTitle => $"MU Console Client - {_characterState?.Name ?? "No Character"} ({CharacterClassDatabase.GetClassName(_characterState?.Class ?? CharacterClassNumber.DarkWizard)}) - {CurrentState}";
         public string ConnectionStatus => $"State: {CurrentState}";
         public string CharacterInfo => IsInGame ? $"Char: {_characterState.Name}, Lvl: {_characterState.Level} ({_characterState.MasterLevel}), Map: {MapDatabase.GetMapName(_characterState.MapId)} ({_characterState.PositionX},{_characterState.PositionY})" : "Not In Game";
         public string CharacterStatsDisplay => IsInGame ? _characterState.GetStatsDisplay() : "N/A";
+
+        public string CharHealthDisplay => IsInGame ? $"{_characterState.CurrentHealth}/{_characterState.MaximumHealth}" : "N/A";
+        public double CharHealthPercentage => IsInGame && _characterState.MaximumHealth > 0 ? (_characterState.CurrentHealth / (double)_characterState.MaximumHealth) * 100 : 0;
+
+        public string CharManaDisplay => IsInGame ? $"{_characterState.CurrentMana}/{_characterState.MaximumMana}" : "N/A";
+        public double CharManaPercentage => IsInGame && _characterState.MaximumMana > 0 ? (_characterState.CurrentMana / (double)_characterState.MaximumMana) * 100 : 0;
+
+        // Calculating experience percentage
+        public string CharExperienceDisplay
+        {
+            get
+            {
+                if (!IsInGame || _characterState.ExperienceForNextLevel == 0) return "N/A";
+                double percentage = (_characterState.Experience / (double)_characterState.ExperienceForNextLevel) * 100;
+                return $"{percentage:F1}%"; // Format to one decimal place
+            }
+        }
+        public double CharExperiencePercentage
+        {
+            get
+            {
+                if (!IsInGame || _characterState.ExperienceForNextLevel == 0) return 0;
+                return (_characterState.Experience / (double)_characterState.ExperienceForNextLevel) * 100;
+            }
+        }
+
+        public int CharStrength => IsInGame ? _characterState.Strength : 0;
+        public int CharAgility => IsInGame ? _characterState.Agility : 0;
+        public int CharVitality => IsInGame ? _characterState.Vitality : 0;
+        public int CharEnergy => IsInGame ? _characterState.Energy : 0;
+        public int CharCommand => IsInGame ? _characterState.Leadership : 0;
+        public string CharShieldDisplay => IsInGame ? $"{_characterState.CurrentShield}/{_characterState.MaximumShield}" : "N/A";
+        public string CharAbilityDisplay => IsInGame ? $"{_characterState.CurrentAbility}/{_characterState.MaximumAbility}" : "N/A";
+
 
         // CanExecute properties for commands
         public bool CanConnectServer => CurrentState == ClientConnectionState.Initial || CurrentState == ClientConnectionState.Disconnected;
@@ -394,10 +428,12 @@ namespace MuOnlineConsole.GUI.ViewModels
         /// <summary>
         /// Updates the character stats display in the UI.
         /// </summary>
+        // --- Modification of the UpdateStatsDisplay Method ---
         public void UpdateStatsDisplay()
         {
             Dispatcher.UIThread.InvokeAsync(() =>
             {
+                // Update list for the Stats tab (remains unchanged)
                 CharacterStatsList.Clear();
                 if (IsInGame)
                 {
@@ -407,9 +443,26 @@ namespace MuOnlineConsole.GUI.ViewModels
                         CharacterStatsList.Add(stat);
                     }
                 }
+
+                // !! IMPORTANT !!: Notify UI about the change of ALL properties used in the side panel
                 OnPropertyChanged(nameof(CharacterInfo));
                 OnPropertyChanged(nameof(WindowTitle));
-                OnPropertyChanged(nameof(CharacterStatsDisplay));
+                // OnPropertyChanged(nameof(CharacterStatsDisplay)); // No longer needed for the side panel
+
+                // Notifications for new side panel properties
+                OnPropertyChanged(nameof(CharHealthDisplay));
+                OnPropertyChanged(nameof(CharHealthPercentage));
+                OnPropertyChanged(nameof(CharManaDisplay));
+                OnPropertyChanged(nameof(CharManaPercentage));
+                OnPropertyChanged(nameof(CharExperienceDisplay));
+                OnPropertyChanged(nameof(CharExperiencePercentage));
+                OnPropertyChanged(nameof(CharStrength));
+                OnPropertyChanged(nameof(CharAgility));
+                OnPropertyChanged(nameof(CharVitality));
+                OnPropertyChanged(nameof(CharEnergy));
+                OnPropertyChanged(nameof(CharCommand));
+                OnPropertyChanged(nameof(CharShieldDisplay));
+                OnPropertyChanged(nameof(CharAbilityDisplay));
             });
         }
 
